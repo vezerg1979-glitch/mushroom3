@@ -114,6 +114,30 @@ def test_icon_declared_in_spec(spec):
     assert value(spec, "presplash.filename")
 
 
+def test_app_title_matches_the_spec(spec):
+    """Название на экране телефона и в магазине должно быть одним и тем же.
+
+    Заголовок живёт в двух местах: buildozer.spec задаёт подпись под значком
+    на рабочем столе, App.title — то, что видно в списке запущенных программ.
+    Разъезжались они уже дважды.
+    """
+    with open(os.path.join(ROOT, "android", "main.py"), encoding="utf-8") as f:
+        src = f.read()
+    m = re.search(r'^\s*title = "(.+)"$', src, re.M)
+    assert m, "в main.py не нашлось App.title"
+    assert m.group(1) == value(spec, "title")
+
+
+def test_package_name_is_not_renamed(spec):
+    """Имя пакета менять нельзя, как бы ни менялось название приложения.
+
+    Для Android и для магазина это другое приложение: обновление поверх
+    установленного не встанет, а журнал, треки и снимки останутся в старом.
+    """
+    assert value(spec, "package.name") == "mushroomforecast"
+    assert value(spec, "package.domain") == "ru.grezev"
+
+
 def test_numeric_version_present_and_matches(spec):
     """Магазин отвергает загрузку с тем же кодом версии, что и предыдущая."""
     code = value(spec, "android.numeric_version")

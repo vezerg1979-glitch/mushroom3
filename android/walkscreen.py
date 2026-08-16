@@ -22,13 +22,16 @@ from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.utils import get_color_from_hex as hexc
 
 import palette
 
+import buzz
 import history as history_mod
+import icons
 import location as location_mod
 import mushroom_forecast as engine
 import compass as compass_mod
@@ -133,7 +136,24 @@ class WalkScreen(Popup):
         # см. _load_history(). Касание по старому месту открывает карточку.
         self.map.on_spot = self._show_spot
         self.map.set_here(lat, lon)
-        root.add_widget(self.map)
+
+        # Кнопки масштаба лежат ПОВЕРХ карты, а не отдельной полосой под ней:
+        # карта на телефоне и так мала, отдавать ей ещё 40 dp жалко. До сих
+        # пор масштаб менялся только щипком двумя пальцами — жест, который в
+        # перчатке, одной рукой и с телефоном на шнурке не выходит.
+        map_box = FloatLayout()
+        self.map.size_hint = (1, 1)
+        self.map.pos_hint = {"x": 0, "y": 0}
+        map_box.add_widget(self.map)
+        for i, (txt, step) in enumerate((("+", 1), ("−", -1))):
+            b = Button(text=txt, font_size=sp(20), bold=True,
+                       size_hint=(None, None), size=(dp(44), dp(44)),
+                       pos_hint={"right": 0.98, "top": 0.98 - i * 0.115},
+                       background_normal="", background_color=(1, 1, 1, 0.85),
+                       color=INK)
+            b.bind(on_release=lambda _b, st=step: self.map.zoom_by(st))
+            map_box.add_widget(b)
+        root.add_widget(map_box)
 
         self.arrow = NavArrow(size_hint_y=None, height=0)
         root.add_widget(self.arrow)
@@ -161,6 +181,14 @@ class WalkScreen(Popup):
         self.b_find.bind(on_release=lambda *_: self.mark_find())
         btns.add_widget(self.b_start)
         btns.add_widget(self.b_find)
+        # Отмена стоит вплотную к «Нашёл!»: ошибаются именно этой кнопкой —
+        # промахнулись видом, нажали дважды, отметили не сходя с места.
+        # Значок вместо надписи, чтобы не отнимать ширину у двух главных.
+        self.b_undo = icons.IconButton(icon="undo", color=INK, bg=hexc(palette.SOFT),
+                                       size_hint_x=None, width=dp(56),
+                                       disabled=True)
+        self.b_undo.bind(on_release=lambda *_: self.undo())
+        btns.add_widget(self.b_undo)
         root.add_widget(btns)
 
         # Вспомогательные кнопки в два ряда. Пять штук в одну строку на экране
@@ -310,6 +338,7 @@ class WalkScreen(Popup):
     # --- управление ---------------------------------------------------------
     def toggle(self):
         self.running = not self.running
+        buzz.tap()
         self.b_start.text = "Пауза" if self.running else "Продолжить"
         self.b_start.background_color = MUTED if self.running else ACCENT
         self.b_find.disabled = not self.running
@@ -541,6 +570,7 @@ class WalkScreen(Popup):
         pop.dismiss()
         lat, lon = self.map.here
         find = self.walk.add_find(lat, lon, key)
+        buzz.tap()                     # подтверждение, когда смотреть некогда
         name = engine.SPECIES[key].name if key else "метка"
         self.hint.text = f"Отмечено: {name}"
         self.map.redraw()
@@ -585,6 +615,8 @@ class WalkScreen(Popup):
 
     def undo(self):
         f = self.walk.undo_find()
+        if f:
+            buzz.long()                # отмена ощущается иначе, чем постановка
         self.hint.text = "Последняя метка убрана" if f else "Меток нет"
         self.map.redraw()
         self._refresh()
@@ -710,6 +742,7 @@ class WalkScreen(Popup):
         h, m = divmod(mins, 60)
         self.c_time.set(f"{h} ч {m} мин" if h else f"{m} мин")
         self.c_finds.set(str(len(self.walk.finds)))
+        self.b_undo.disabled = not self.walk.finds
 
     def show_service_log(self):
         """Диагностика: что именно происходит с фоновой записью."""

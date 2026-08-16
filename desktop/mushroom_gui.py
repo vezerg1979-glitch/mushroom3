@@ -689,7 +689,7 @@ class HowItWorks(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"Прогноз плодоношения грибов  v{engine.VERSION}")
+        self.setWindowTitle(f"Навигатор грибника  v{engine.VERSION}")
         self.resize(1180, 760)
         self.settings = QSettings("grezev", "mushroom-forecast")
         self.res: Result | None = None

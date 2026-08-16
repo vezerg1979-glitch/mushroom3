@@ -1,13 +1,13 @@
 [app]
 
-title = Грибной прогноз
+title = Навигатор грибника
 package.name = mushroomforecast
 package.domain = ru.grezev
 
 source.dir = .
 source.include_exts = py,png,jpg,ttf,json
 
-version = 2.8
+version = 2.9
 
 # Ветку p4a обязательно держать закреплённой: на develop собирается
 # Python 3.14, под который не подходят колёса, и сборка обрывается
@@ -30,7 +30,7 @@ icon.filename = %(source.dir)s/icon.png
 
 # Числовой код версии. Магазин требует, чтобы он рос с каждой загрузкой,
 # иначе новая сборка не принимается. Формат: 2.7 -> 20700, 2.7.1 -> 20701.
-android.numeric_version = 20800
+android.numeric_version = 20900
 
 # POST_NOTIFICATIONS добавлено для Android 13+: без него уведомление
 # переднего плана не показывается, и сервис выглядит «мёртвым».
@@ -43,7 +43,7 @@ android.numeric_version = 20800
 # по ACTION_IMAGE_CAPTURE, своей камерой приложение не пользуется. А если
 # объявить это разрешение, Android начнёт требовать его в работе — лишний
 # вопрос человеку на ровном месте.
-android.permissions = android.permission.INTERNET,android.permission.ACCESS_NETWORK_STATE,android.permission.ACCESS_FINE_LOCATION,android.permission.ACCESS_COARSE_LOCATION,android.permission.ACCESS_BACKGROUND_LOCATION,android.permission.FOREGROUND_SERVICE,android.permission.POST_NOTIFICATIONS,android.permission.WAKE_LOCK,android.permission.WRITE_EXTERNAL_STORAGE
+android.permissions = android.permission.INTERNET,android.permission.ACCESS_NETWORK_STATE,android.permission.ACCESS_FINE_LOCATION,android.permission.ACCESS_COARSE_LOCATION,android.permission.ACCESS_BACKGROUND_LOCATION,android.permission.FOREGROUND_SERVICE,android.permission.POST_NOTIFICATIONS,android.permission.WAKE_LOCK,android.permission.WRITE_EXTERNAL_STORAGE,android.permission.VIBRATE
 
 # Комбинация ниже подобрана отладкой, менять только осознанно:
 #   ndk = 25b      — на r28c python-for-android собирает Python 3.14 и падает

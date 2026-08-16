@@ -11,6 +11,7 @@ Kivy кладёт в APK, их нет, и на телефоне обе кноп�
 вернулась на кнопку следующей правкой.
 """
 
+import ast
 import os
 import re
 import sys
@@ -50,6 +51,16 @@ def bounds(shapes):
             x, y, w, h, _r, lw = it[1:]
             xs += [x - lw / 2, x + w + lw / 2]
             ys += [y - lw / 2, y + h + lw / 2]
+        elif kind == "arc":
+            # Дуга оценивается по описанной окружности: с запасом, зато без
+            # разбора углов — от теста нужна граница, а не точный контур.
+            cx, cy, r, _a1, _a2, lw = it[1:]
+            xs += [cx - r - lw / 2, cx + r + lw / 2]
+            ys += [cy - r - lw / 2, cy + r + lw / 2]
+        elif kind == "tri":
+            p = it[1]
+            xs += list(p[0::2])
+            ys += list(p[1::2])
         else:
             raise AssertionError(f"неизвестный примитив {kind!r}")
     return min(xs), min(ys), max(xs), max(ys)
@@ -108,19 +119,66 @@ def test_unknown_icon_is_loud():
 #  Сторож: буквы на кнопках
 # --------------------------------------------------------------------------- #
 
-# Знаки, которых нет в шрифте Kivy на Android. Список пополнять по мере
-# находок: каждый такой символ на телефоне превращается в пустой квадрат.
-MISSING_IN_FONT = "♥≡♦♣♠✓✕★☆⚑⌂"
+# Знаки за пределами латиницы и кириллицы, которые в шрифте Kivy ЕСТЬ.
+# Список получен разбором самого Roboto-Regular.ttf из поставки Kivy — того
+# файла, который уезжает в APK. Всё, чего здесь нет, на телефоне становится
+# пустым квадратом; на компьютере при отладке подставляется системный шрифт,
+# и увидеть это до сборки нельзя.
+FONT_HAS = set("≥−…—–·«»°±×÷§№")
+
+# Модули, которые печатают в терминал, а не рисуют на телефоне: у консоли
+# свой шрифт, и блоки со стрелками там выводятся нормально.
+CONSOLE_ONLY = {"mushroom_forecast.py", "journal.py"}
 
 
-def test_buttons_do_not_rely_on_missing_glyphs():
-    with open(os.path.join(ROOT, "main.py"), encoding="utf-8") as f:
-        src = f.read()
-    for line in src.splitlines():
-        if "text=" not in line:
+def _visible_strings(path):
+    """Строковые литералы модуля, кроме докстрок.
+
+    Разбор через ast, а не поиск по тексту: комментарии и докстроки человеку
+    на экране не показываются, и запрещать в них упоминание знака «♥» —
+    значит запретить объяснить, почему его нельзя ставить на кнопку.
+    """
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    docs = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)):
             continue
-        bad = [ch for ch in MISSING_IN_FONT if ch in line]
-        assert not bad, f"символа {bad} нет в шрифте на Android: {line.strip()}"
+        body = getattr(node, "body", None)
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            docs.add(id(body[0].value))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docs):
+            yield node.lineno, node.value
+
+
+def _kivy_modules():
+    for name in sorted(os.listdir(ROOT)):
+        if name.endswith(".py") and name not in CONSOLE_ONLY:
+            yield name
+
+
+@pytest.mark.parametrize("name", list(_kivy_modules()))
+def test_no_glyphs_the_bundled_font_lacks(name):
+    """Ни одного знака, которого нет в шрифте, в видимых строках.
+
+    Так уже дважды ловили пустые квадраты: сердце на кнопке доната, стрелки
+    в подсказках навигации и полоска «почему такой индекс», набранная
+    блочными знаками. Каждый раз это выяснялось на телефоне в лесу.
+    """
+    bad = []
+    for no, text in _visible_strings(os.path.join(ROOT, name)):
+        for ch in text:
+            o = ord(ch)
+            if o < 0x2000 or 0x0400 <= o <= 0x04FF:
+                continue
+            if ch not in FONT_HAS:
+                bad.append((no, ch, hex(o), text[:50]))
+    assert not bad, f"нет в шрифте: {bad[:4]}"
 
 
 def test_icon_button_is_used_for_donate_and_journal():

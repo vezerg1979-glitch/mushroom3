@@ -45,7 +45,7 @@ TILE = 256
 MIN_Z, MAX_Z = 3, 17
 # Адрес тайлов намеренно не зашит в код: правила OSM это прямо советуют, а
 # офлайн-карта вообще требует другого источника — см. tilesource.py.
-UA = "mushroom-forecast/2.8 (personal use)"
+UA = "mushroom-forecast/2.9 (personal use)"
 
 INK = hexc(palette.INK)
 MUTED = hexc(palette.MUTED)

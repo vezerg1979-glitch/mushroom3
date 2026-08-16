@@ -20,6 +20,8 @@ IconButton переводит их в инструкции холста. Гео�
 
 from __future__ import annotations
 
+import math
+
 # --------------------------------------------------------------------------- #
 #  Геометрия
 # --------------------------------------------------------------------------- #
@@ -29,6 +31,8 @@ from __future__ import annotations
 #   ("quad", (x1, y1, ... x4, y4))        — залитый четырёхугольник
 #   ("line", (x1, y1, x2, y2, ...), lw)   — ломаная толщиной lw
 #   ("rrect", x, y, w, h, r, lw)          — контур прямоугольника со скруглением r
+#   ("arc", cx, cy, r, a1, a2, lw)        — дуга; углы в градусах от «вверх» по часовой
+#   ("tri", (x1, y1, x2, y2, x3, y3))     — залитый треугольник
 
 # Доля кнопки, которую занимает значок. Меньше — значок теряется, больше —
 # упирается в края и выглядит случайно попавшим в кнопку.
@@ -86,7 +90,41 @@ def journal(x: float, y: float, w: float, h: float) -> list:
     ]
 
 
-ICONS = {"heart": heart, "journal": journal}
+def undo(x: float, y: float, w: float, h: float) -> list:
+    """Стрелка возврата: прямая влево и петля вниз-назад.
+
+    Круговая стрелка сюда не годится — её читают как «обновить». Загнутая
+    влево ни с чем не путается и означает ровно одно: «шаг назад».
+
+    Не крестик и не корзина: убирается последнее действие, а не «всё». Крест
+    рядом с «Нашёл!» читался бы как «закрыть поход» — самая дорогая ошибка,
+    какую можно сделать одной кнопкой в лесу.
+    """
+    s = min(w, h)
+    lw = s * 0.105
+    cx = x + w / 2.0
+    cy = y + h / 2.0
+
+    # Числа подобраны так, чтобы фигура заняла квадрат целиком и села в нём
+    # ровно: остриё уходит влево, а петля вправо-вниз, и без поправки значок
+    # visibly съезжал бы к левому краю кнопки.
+    r = s * 0.30
+    y_top = cy + s * 0.266
+    x_left = cx - s * 0.2575
+    x_mid = cx + s * 0.0825
+    hw = s * 0.12                                     # половина ширины остриё
+    return [
+        ("line", (x_left, y_top, x_mid, y_top), lw),
+        # Дуга от «вверх» по часовой на пол-оборота: уходит вправо, вниз и
+        # возвращается влево — хвост отмены.
+        ("arc", x_mid, y_top - r, r, 0.0, 180.0, lw),
+        ("tri", (x_left - hw * 1.5, y_top,
+                 x_left, y_top + hw,
+                 x_left, y_top - hw)),
+    ]
+
+
+ICONS = {"heart": heart, "journal": journal, "undo": undo}
 
 
 def shapes(name: str, x: float, y: float, w: float, h: float) -> list:
@@ -104,7 +142,7 @@ def shapes(name: str, x: float, y: float, w: float, h: float) -> list:
 
 try:                                                  # pragma: no cover
     from kivy.graphics import (Color, Ellipse, Line, Quad,  # noqa: F401
-                               RoundedRectangle)
+                               RoundedRectangle, Triangle)
     from kivy.metrics import dp
     from kivy.uix.behaviors import ButtonBehavior
     from kivy.uix.widget import Widget
@@ -127,7 +165,8 @@ else:
             self.bg = bg
             self.radius = dp(8) if radius is None else radius
             self.fill = fill
-            self.bind(pos=self.redraw, size=self.redraw, state=self.redraw)
+            self.bind(pos=self.redraw, size=self.redraw, state=self.redraw,
+                      disabled=self.redraw)
             self.redraw()
 
         def _bg_color(self):
@@ -146,7 +185,11 @@ else:
                 Color(*self._bg_color())
                 RoundedRectangle(pos=self.pos, size=self.size,
                                  radius=[self.radius])
-                Color(*self.color)
+                # Выключенная кнопка бледнеет вся целиком: серый значок на
+                # обычном фоне человек принимает за «просто такой цвет».
+                c = self.color
+                Color(c[0], c[1], c[2], (c[3] if len(c) > 3 else 1.0)
+                      * (0.30 if self.disabled else 1.0))
                 for item in shapes(self.icon, bx, by, side, side):
                     kind = item[0]
                     if kind == "ellipse":
@@ -160,3 +203,9 @@ else:
                         Line(rounded_rectangle=(item[1], item[2], item[3],
                                                 item[4], item[5]),
                              width=item[6] / 2.0, joint="round")
+                    elif kind == "arc":
+                        Line(circle=(item[1], item[2], item[3], item[4],
+                                     item[5]),
+                             width=item[7] / 2.0, cap="round")
+                    elif kind == "tri":
+                        Triangle(points=list(item[1]))

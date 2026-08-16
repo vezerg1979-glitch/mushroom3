@@ -34,7 +34,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "2.8"
+VERSION = "2.9"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"

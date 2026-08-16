@@ -256,3 +256,38 @@ def test_poll_threshold_value():
     assert m, "порог аварийного опроса не задан"
     value = float(m.group(1))
     assert 5.0 <= value <= 60.0, f"{value} с — за пределами разумного"
+
+
+# --------------------------------------------------------------------------- #
+#  Кнопки на экране похода
+# --------------------------------------------------------------------------- #
+
+def test_undo_is_reachable_from_the_screen():
+    """Метод undo() был написан, но ни одна кнопка на него не ссылалась.
+
+    Ошибочную метку — промахнулись видом, нажали дважды — убрать было нечем,
+    хотя вся механика для этого уже существовала.
+    """
+    src = _src("walkscreen.py")
+    assert "self.undo()" in src
+    assert 'icon="undo"' in src
+
+
+def test_undo_is_dimmed_while_there_is_nothing_to_undo():
+    src = _src("walkscreen.py")
+    assert "self.b_undo.disabled = not self.walk.finds" in src
+
+
+def test_map_has_zoom_buttons():
+    """Щипок двумя пальцами в перчатке и одной рукой не выходит."""
+    src = _src("walkscreen.py")
+    assert "self.map.zoom_by" in src
+
+
+def test_zoom_buttons_do_not_steal_height_from_the_map():
+    """Кнопки лежат поверх карты: отдавать ей ещё 40 dp полосой нельзя."""
+    src = _src("walkscreen.py")
+    assert "FloatLayout" in src
+    i = src.index("map_box = FloatLayout()")
+    j = src.index("root.add_widget(map_box)")
+    assert "pos_hint" in src[i:j]

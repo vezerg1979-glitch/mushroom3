@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Грибной прогноз — мобильное приложение (Kivy) поверх ядра mushroom_forecast.py.
+Навигатор грибника — мобильное приложение (Kivy) поверх ядра mushroom_forecast.py.
 
 Сборка APK:  buildozer -v android debug
 Отладка на ПК: python main.py
@@ -65,6 +65,7 @@ import icons
 import mushroom_forecast as engine
 import palette
 import places as places_mod
+import prefs
 import track as track_mod
 from mapview import PlacePicker
 from walkscreen import WalkScreen
@@ -88,6 +89,10 @@ RAIN = palette.RAIN
 LEVEL_COLORS = [(th, hexc(bg), hexc(fg)) for th, bg, fg in palette.LEVELS]
 
 SPECIES_COLORS = palette.SPECIES
+
+#: Знак для полосок в объяснениях. Длинные тире смыкаются в сплошную линию,
+#: и, в отличие от блочных знаков, они в шрифте есть — проверено тестом.
+BAR = "—"
 
 # Минимальный размер элемента, в который надо попасть пальцем. Меньше 48 dp
 # промахиваются даже дома на диване, а в лесу телефон держат в перчатке.
@@ -398,7 +403,7 @@ class _Catcher(ExceptionHandler):
 
 
 class MushroomApp(App):
-    title = "Грибной прогноз"
+    title = "Навигатор грибника"
 
     def build(self):
         try:
@@ -411,6 +416,7 @@ class MushroomApp(App):
         self.res = None
         self.lat, self.lon = 55.9606, 38.0456        # Фрязино по умолчанию
         self.sel = None                      # выбранный вид или None = лучший
+                                             # (восстанавливается ниже из prefs)
         root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
 
         # --- строка места ---
@@ -506,17 +512,24 @@ class MushroomApp(App):
         root.add_widget(self.card)
 
         # --- выбор вида ---
+        # Вид и тип леса восстанавливаются с прошлого запуска: человек ходит
+        # за одним и тем же грибом в один и тот же лес, и заново выставлять
+        # два списка при каждом открытии — работа на пустом месте.
+        saved = prefs.load()
         picks = BoxLayout(size_hint_y=None, height=TOUCH - dp(4), spacing=dp(6))
-        self.sp_bio = Spinner(text=engine.BIOTOPES["смешанный"].name, font_size=sp(12),
+        self.sp_bio = Spinner(text=self._saved_biotope(saved), font_size=sp(12),
                               background_normal="", background_color=CARD, color=INK,
                               values=[b.name for b in engine.BIOTOPES.values()])
         self.sp_bio.bind(text=self._on_biotope)
-        self.sp_kind = Spinner(text="Все виды сезона", size_hint_y=None, height=TOUCH - dp(4),
+        self.sp_kind = Spinner(text=self._saved_kind(saved), size_hint_y=None,
+                               height=TOUCH - dp(4),
                                font_size=sp(13), background_normal="",
                                background_color=CARD, color=INK,
                                values=["Все виды сезона"]
                                       + [s.name for s in engine.SPECIES.values()])
         self.sp_kind.bind(text=self._on_kind)
+        if self.sp_kind.text != self.ALL_KINDS:
+            self.sel = self.sp_kind.text
         picks.add_widget(self.sp_kind)
         picks.add_widget(self.sp_bio)
         root.add_widget(picks)
@@ -748,17 +761,44 @@ class MushroomApp(App):
         cancel.bind(on_release=lambda *_: pop.dismiss())
         pop.open()
 
+    #: Подпись «любой вид» в списке. Пустой sel означает то же самое.
+    ALL_KINDS = "Все виды сезона"
+
+    @staticmethod
+    def _saved_biotope(saved: dict) -> str:
+        """Тип леса с прошлого запуска.
+
+        Сверяемся со справочником: за обновление приложения вид или биотоп
+        могли переименовать, и подставленная вслепую строка оставила бы в
+        списке подпись, которой ни в одном профиле нет.
+        """
+        key = saved.get("biotope")
+        b = engine.BIOTOPES.get(key) if key else None
+        if b is None:
+            return engine.BIOTOPES["смешанный"].name
+        engine.set_biotope(b.key)
+        return b.name
+
+    @classmethod
+    def _saved_kind(cls, saved: dict) -> str:
+        name = saved.get("kind")
+        if name and any(sp.name == name for sp in engine.SPECIES.values()):
+            return name
+        return cls.ALL_KINDS
+
     def _on_biotope(self, _sp, text):
         key = next((b.key for b in engine.BIOTOPES.values() if b.name == text), None)
         if not key:
             return
         engine.set_biotope(key)
+        prefs.save(biotope=key)
         if self.res is not None:
             self.res = Result(self.res.place, self.res.days, self.res.today)
             self.refresh()
 
     def _on_kind(self, _sp, text):
-        self.sel = None if text == "Все виды сезона" else text
+        self.sel = None if text == self.ALL_KINDS else text
+        prefs.save(kind="" if self.sel is None else self.sel)
         self.refresh()
 
     # --- вывод -------------------------------------------------------------
@@ -887,8 +927,12 @@ class MushroomApp(App):
         for nm, val, why in engine.explain(spec, i, r.days, r.m, r.ts):
             filled = int(round(val * 10))
             rows.append(f"{nm}  [b]{val*100:.0f}%[/b]")
-            rows.append(f"[color=3e7d2c]{'▇' * filled}[/color]"
-                        f"[color=cfd4c8]{'▇' * (10 - filled)}[/color]")
+            # Полоска набрана длинными тире, а не блоками «▇»: блочных знаков
+            # в шрифте Kivy нет, и на телефоне вместо столбика выходил ряд
+            # пустых квадратов — то есть объяснение «почему такой индекс»
+            # не работало ровно там, где его читают.
+            rows.append(f"[size=15sp][color=3e7d2c]{BAR * filled}[/color]"
+                        f"[color=cfd4c8]{BAR * (10 - filled)}[/color][/size]")
             rows.append(f"[size=11sp][color=7b8272]{why}[/color][/size]")
         rows += ["", "[i]" + engine.plain_summary(spec, i, r.days, r.m, r.ts,
                                                   r.value(spec.name, i)) + "[/i]"]

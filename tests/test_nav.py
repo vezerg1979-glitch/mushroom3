@@ -64,7 +64,7 @@ def test_relative_is_signed_and_short():
 
 
 def test_turn_hint_reads_naturally():
-    assert nav.turn_hint(0, 0).startswith("↑")           # цель по курсу
+    assert nav.turn_hint(0, 0) == "прямо"                 # цель по курсу
     assert "направо" in nav.turn_hint(90, 0)
     assert "налево" in nav.turn_hint(270, 0)
     assert "назад" in nav.turn_hint(180, 0)
@@ -129,7 +129,7 @@ def test_text_uses_turn_when_moving_and_rumb_when_standing():
 
     walking = nav.guide(LAT, LON, *target,
                         points=[P(*north(LAT, LON, i * 20)) for i in range(5)])
-    assert walking.text.startswith("↑")
+    assert walking.text.startswith("прямо")
     assert "курс появится" not in walking.detail
 
 
