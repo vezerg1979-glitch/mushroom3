@@ -473,6 +473,14 @@ class MushroomApp(App):
                         background_color=BLUE)
         b_walk.bind(on_release=lambda *_: self.start_walk())
         row2.add_widget(b_walk)
+        # Журнал стоит рядом с «В лес» не случайно: это две стороны одного
+        # дела — сходить и посмотреть, как ходил раньше. Значок вместо
+        # надписи, потому что строка уже занята «Прогнозом».
+        b_log = Button(text="≡", size_hint_x=None, width=TOUCH, font_size=sp(20),
+                       bold=True, background_normal="", background_color=CARD,
+                       color=INK)
+        b_log.bind(on_release=lambda *_: self.show_walk_journal())
+        row2.add_widget(b_log)
         root.add_widget(row2)
 
         # --- вердикт ---
@@ -608,6 +616,11 @@ class MushroomApp(App):
         self._sheet("Не удалось получить данные",
                     f"{msg}\n\nПроверьте название места и подключение к сети. "
                     f"Вместо названия можно ввести координаты: 55.9606, 38.0456", 0.45)
+
+    def show_walk_journal(self):
+        """Журнал походов: куда ходили, что нашли, снимки находок."""
+        import walkjournal
+        walkjournal.show()
 
     def start_walk(self):
         """Режим похода: запись маршрута, метки находок, счётчик метров."""

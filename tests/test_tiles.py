@@ -8,7 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "android"))
 
-import tiles  # noqa: E402
+import tiles
+import tilesource  # noqa: E402
 
 LAT, LON = 55.9606, 38.0456
 
@@ -71,7 +72,31 @@ def test_describe_is_human_readable():
     assert "Слишком большая" in tiles.describe(LAT, LON, 5.0)
 
 
-def test_download_skips_existing_and_counts(tmp_path, monkeypatch):
+@pytest.fixture
+def offline_allowed(monkeypatch):
+    """Источник, владелец которого офлайн разрешает.
+
+    Общие серверы OSM скачивание впрок запрещают, и tiles.download() их
+    честно отказывается качать — поэтому тестам нужен свой источник.
+    """
+    monkeypatch.setattr(tilesource, "_current",
+                        {"key": "custom", "name": "Свой сервер",
+                         "url": "https://example.test/{z}/{x}/{y}.png",
+                         "attribution": "тест", "offline": True})
+    yield
+    monkeypatch.setattr(tilesource, "_current", None)
+
+
+def test_download_refuses_when_the_source_forbids_it(tmp_path, monkeypatch):
+    """Правила чужого сервера не должны зависеть от того, куда нажали."""
+    monkeypatch.setattr(tilesource, "_current",
+                        dict(tilesource.PRESETS["osm"], key="osm"))
+    with pytest.raises(tiles.NotAllowed):
+        tiles.download([(13, 1, 1)], str(tmp_path))
+    monkeypatch.setattr(tilesource, "_current", None)
+
+
+def test_download_skips_existing_and_counts(tmp_path, monkeypatch, offline_allowed):
     items = [(15, 100, 200), (15, 100, 201), (15, 100, 202)]
     d = str(tmp_path)
     # один тайл уже в кэше
@@ -105,7 +130,7 @@ def test_download_skips_existing_and_counts(tmp_path, monkeypatch):
     assert os.path.exists(os.path.join(d, "15_100_202.png"))
 
 
-def test_download_can_be_stopped(tmp_path, monkeypatch):
+def test_download_can_be_stopped(tmp_path, monkeypatch, offline_allowed):
     items = [(15, 1, i) for i in range(10)]
     monkeypatch.setattr(tiles.time, "sleep", lambda *_: None)
     monkeypatch.setattr(tiles.urllib.request, "urlopen",
@@ -122,7 +147,7 @@ def test_download_can_be_stopped(tmp_path, monkeypatch):
     assert res["failed"] < 10                  # прервались, не дойдя до конца
 
 
-def test_network_failure_is_counted_not_raised(tmp_path, monkeypatch):
+def test_network_failure_is_counted_not_raised(tmp_path, monkeypatch, offline_allowed):
     monkeypatch.setattr(tiles.time, "sleep", lambda *_: None)
     monkeypatch.setattr(tiles.urllib.request, "urlopen",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("нет сети")))

@@ -241,6 +241,35 @@ def save(walk: Walk) -> str:
     return path
 
 
+def path_for(walk: Walk) -> str:
+    """Файл похода. Имя строится из времени начала — оно и есть ключ."""
+    name = datetime.fromtimestamp(walk.started).strftime("%Y-%m-%d_%H%M") + ".json"
+    return os.path.join(_dir(), name)
+
+
+def delete(walk: Walk) -> int:
+    """Удаляет поход вместе с его снимками и выгруженным GPX.
+
+    Снимки удаляются здесь же, а не при уборке: уборка ориентируется на
+    сохранённые походы, и после удаления файла кадры стали бы ничейными,
+    но до следующего похода лежали бы мёртвым грузом.
+
+    Возвращает число удалённых файлов.
+    """
+    import photos as photos_mod
+
+    gone = 0
+    for name in walk.photo_names():
+        gone += int(photos_mod.remove(name))
+    for path in (path_for(walk), path_for(walk)[:-5] + ".gpx"):
+        try:
+            os.remove(path)
+            gone += 1
+        except OSError:
+            continue
+    return gone
+
+
 def load_all() -> list[Walk]:
     out = []
     for name in sorted(os.listdir(_dir()), reverse=True):

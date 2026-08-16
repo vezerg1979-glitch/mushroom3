@@ -56,7 +56,7 @@ def show_photo(name: str):
     path = photos_mod.path_for(name)
     box = BoxLayout(orientation="vertical", padding=dp(4), spacing=dp(4))
     _fill(box, CARD)
-    box.add_widget(Image(source=path, allow_stretch=True, keep_ratio=True))
+    box.add_widget(Image(source=path, fit_mode="contain"))
     pop = Popup(title=name, content=box, size_hint=(0.98, 0.9),
                 title_size=sp(11), separator_color=ACCENT)
     close = Button(text="Закрыть", size_hint_y=None, height=dp(44),
@@ -173,7 +173,7 @@ class FindDialog(Popup):
             cell = BoxLayout(orientation="vertical", size_hint=(None, None),
                              size=(THUMB, THUMB), spacing=dp(2))
             img = AsyncImage(source=photos_mod.path_for(name),
-                             allow_stretch=True, keep_ratio=True)
+                             fit_mode="contain")
             img.bind(on_touch_down=lambda w, touch, n=name:
                      bool(w.collide_point(*touch.pos)) and show_photo(n))
             cell.add_widget(img)

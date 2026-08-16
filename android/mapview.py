@@ -36,14 +36,16 @@ from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
 import palette
+import tilesource
 
 import mushroom_forecast as engine
 import places as places_mod
 
 TILE = 256
 MIN_Z, MAX_Z = 3, 17
-TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-UA = "mushroom-forecast/2.4 (personal use)"
+# Адрес тайлов намеренно не зашит в код: правила OSM это прямо советуют, а
+# офлайн-карта вообще требует другого источника — см. tilesource.py.
+UA = "mushroom-forecast/2.8 (personal use)"
 
 INK = hexc(palette.INK)
 MUTED = hexc(palette.MUTED)
@@ -121,7 +123,7 @@ class TileMap(Widget):
                     pass
         if key not in self._pending and len(self._pending) < 12:
             self._pending.add(key)
-            UrlRequest(TILE_URL.format(z=z, x=x, y=y),
+            UrlRequest(tilesource.url().format(z=z, x=x, y=y),
                        req_headers={"User-Agent": UA},
                        on_success=lambda req, res, k=key: self._got(k, res),
                        on_failure=lambda req, res, k=key: self._failed(k),
@@ -381,7 +383,7 @@ class TileMap(Widget):
             # атрибуция
             Color(1, 1, 1, 0.75)
             Rectangle(pos=(self.right - dp(150), self.y), size=(dp(150), dp(15)))
-            self._text("© OpenStreetMap contributors", self.right - dp(146),
+            self._text(tilesource.attribution(), self.right - dp(146),
                        self.y + dp(2), 8, hexc("#4A5142"))
             if self._offline and missing:
                 Color(1, 0.96, 0.90, 0.95)
@@ -447,6 +449,16 @@ class PlacePicker(Popup):
         zrow.add_widget(self.lbl)
         root.add_widget(zrow)
 
+        # Кнопка сохранения карты стоит здесь, а не на главном экране:
+        # человек уже смотрит на нужный кусок местности и видит, что именно
+        # сохраняет. На главном экране это была бы кнопка «сохранить
+        # неизвестно что».
+        b_offline = Button(text="Сохранить карту для леса", size_hint_y=None,
+                           height=dp(44), font_size=sp(13), background_normal="",
+                           background_color=hexc(palette.SOFT), color=INK)
+        b_offline.bind(on_release=lambda *_: self._save_offline())
+        root.add_widget(b_offline)
+
         btns = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
         cancel = Button(text="Отмена", background_normal="", background_color=CARD,
                         color=INK, font_size=sp(14))
@@ -461,6 +473,11 @@ class PlacePicker(Popup):
         super().__init__(title="Где считать прогноз", content=root,
                          size_hint=(0.96, 0.92), separator_color=ACCENT,
                          title_size=sp(15), **kw)
+
+    def _save_offline(self):
+        """Скачать квадрат карты вокруг выбранной точки."""
+        import offlinemap
+        offlinemap.show(self.lat, self.lon, self.ti.text.strip())
 
     def _picked(self, lat, lon):
         self.lat, self.lon = lat, lon
