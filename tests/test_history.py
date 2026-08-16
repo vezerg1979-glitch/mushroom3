@@ -264,3 +264,25 @@ def test_tapping_an_old_spot_opens_it_instead_of_moving_the_marker():
     i = src.index("spot = self._spot_at")
     j = src.index("self.set_marker(*self._latlon(*touch.pos))", i)
     assert "return True" in src[i:j]
+
+
+def test_old_spot_can_become_a_named_place():
+    """Грибной угол должен уметь стать местом с собственным прогнозом.
+
+    Иначе точка живёт только внутри похода: со стартового экрана её не
+    видно и погоду по ней не посчитать — а именно за этим человек и
+    вернётся в следующий раз.
+    """
+    src = _src("walkscreen.py")
+    assert "def _keep_spot" in src
+    i = src.index("def _keep_spot")
+    assert "places_mod.add(" in src[i:i + 700]
+
+
+def test_new_place_gets_a_ready_made_name():
+    """Ввод текста мокрыми руками в лесу — гарантия, что не сохранят вовсе."""
+    src = _src("walkscreen.py")
+    i = src.index("def spot_name")
+    body = src[i:i + 700]
+    assert "engine.SPECIES.get" in body
+    assert "%d.%m.%Y" in body

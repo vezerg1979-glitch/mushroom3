@@ -20,8 +20,6 @@ IconButton переводит их в инструкции холста. Гео�
 
 from __future__ import annotations
 
-import math
-
 # --------------------------------------------------------------------------- #
 #  Геометрия
 # --------------------------------------------------------------------------- #
@@ -127,6 +125,46 @@ def undo(x: float, y: float, w: float, h: float) -> list:
 ICONS = {"heart": heart, "journal": journal, "undo": undo}
 
 
+def plan(item: tuple) -> tuple:
+    """Примитив -> (что рисовать, аргументы). Чистая функция, без Kivy.
+
+    Зачем прослойка. Раньше виджет разбирал кортежи по номерам полей, и в
+    одной ветке номер был на единицу больше, чем нужно: значок отмены падал
+    с IndexError прямо в конструкторе экрана похода. Тесты этого не видели —
+    они проверяли геометрию, то есть содержимое кортежей, а не их разбор.
+
+    Здесь разбор идёт распаковкой: лишнее или недостающее поле — сразу
+    ValueError, и тот же вызов делает тест на компьютере, где ни экрана,
+    ни OpenGL нет.
+
+    Толщина линий в Kivy задаётся половиной: width=1 рисует два пикселя.
+    Пересчёт живёт тут, чтобы геометрия оставалась в человеческих величинах.
+    """
+    kind = item[0]
+    if kind == "ellipse":
+        _, x, y, w, h = item
+        return ("ellipse", {"pos": (x, y), "size": (w, h)})
+    if kind == "quad":
+        _, points = item
+        return ("quad", {"points": list(points)})
+    if kind == "tri":
+        _, points = item
+        return ("tri", {"points": list(points)})
+    if kind == "line":
+        _, points, lw = item
+        return ("line", {"points": list(points), "width": lw / 2.0,
+                         "cap": "round", "joint": "round"})
+    if kind == "rrect":
+        _, x, y, w, h, r, lw = item
+        return ("line", {"rounded_rectangle": (x, y, w, h, r),
+                         "width": lw / 2.0, "joint": "round"})
+    if kind == "arc":
+        _, cx, cy, r, a1, a2, lw = item
+        return ("line", {"circle": (cx, cy, r, a1, a2), "width": lw / 2.0,
+                         "cap": "round"})
+    raise ValueError(f"неизвестный примитив {kind!r}")
+
+
 def shapes(name: str, x: float, y: float, w: float, h: float) -> list:
     """Примитивы значка name, вписанные в прямоугольник (x, y, w, h)."""
     try:
@@ -190,22 +228,8 @@ else:
                 c = self.color
                 Color(c[0], c[1], c[2], (c[3] if len(c) > 3 else 1.0)
                       * (0.30 if self.disabled else 1.0))
+                draw = {"ellipse": Ellipse, "quad": Quad, "tri": Triangle,
+                        "line": Line}
                 for item in shapes(self.icon, bx, by, side, side):
-                    kind = item[0]
-                    if kind == "ellipse":
-                        Ellipse(pos=(item[1], item[2]), size=(item[3], item[4]))
-                    elif kind == "quad":
-                        Quad(points=list(item[1]))
-                    elif kind == "line":
-                        Line(points=list(item[1]), width=item[2] / 2.0,
-                             cap="round", joint="round")
-                    elif kind == "rrect":
-                        Line(rounded_rectangle=(item[1], item[2], item[3],
-                                                item[4], item[5]),
-                             width=item[6] / 2.0, joint="round")
-                    elif kind == "arc":
-                        Line(circle=(item[1], item[2], item[3], item[4],
-                                     item[5]),
-                             width=item[7] / 2.0, cap="round")
-                    elif kind == "tri":
-                        Triangle(points=list(item[1]))
+                    what, kwargs = plan(item)
+                    draw[what](**kwargs)

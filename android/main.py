@@ -63,6 +63,7 @@ from kivy.utils import get_color_from_hex as hexc
 import donate
 import icons
 import mushroom_forecast as engine
+import markup
 import palette
 import places as places_mod
 import prefs
@@ -391,12 +392,42 @@ class _Catcher(ExceptionHandler):
 
     app = None
 
+    @staticmethod
+    def _headline(tb: str) -> str:
+        """Самое важное из трассировки: тип ошибки, место и строка кода.
+
+        Питон печатает это последним, и в окне на телефоне оно оказывается
+        за пределами экрана: человек фотографирует «Ошибка» и десяток путей
+        внутрь Kivy, по которым сказать нельзя ничего. Поэтому суть выносится
+        наверх, а полная трассировка остаётся ниже — она нужна редко.
+        """
+        lines = [l for l in tb.strip().splitlines() if l.strip()]
+        if not lines:
+            return "Причина неизвестна"
+        out = [lines[-1]]
+        # Последний кадр, относящийся к самому приложению, а не к библиотеке.
+        for line in reversed(lines[:-1]):
+            text = line.strip()
+            if text.startswith("File ") and "/app/" in text:
+                out.insert(0, text.split("/app/")[-1])
+                break
+        return "\n".join(out)
+
     def handle_exception(self, inst):
         tb = traceback.format_exc()
-        _log_crash(tb)
+        path = _log_crash(tb)
         if self.app is not None:
             try:
-                self.app._sheet("Ошибка", f"[size=11sp]{tb}[/size]", 0.8)
+                # Текст исключения экранируется: в нём бывают скобки, а
+                # окно, которое падает, показывая ошибку, не оставляет
+                # человеку ни причины, ни возможности её снять.
+                head = markup.esc(self._headline(tb))
+                self.app._sheet(
+                    "Ошибка",
+                    f"[b]{head}[/b]\n"
+                    f"[size=10sp][color=5C6353]Протокол: {markup.esc(path)}"
+                    f"[/color][/size]\n\n"
+                    f"[size=11sp]{markup.esc(tb)}[/size]", 0.8)
             except Exception:                                     # noqa: BLE001
                 pass
         return ExceptionManager.PASS
@@ -414,14 +445,18 @@ class MushroomApp(App):
         handler.app = self
         ExceptionManager.add_handler(handler)
         self.res = None
-        self.lat, self.lon = 55.9606, 38.0456        # Фрязино по умолчанию
+        # Последнее место переживает закрытие приложения. Фрязино остаётся
+        # только для самого первого запуска: человек, который ездит в другую
+        # сторону, иначе каждый раз начинал с чужого леса и лез в карту,
+        # чтобы вернуться к своему.
+        self.lat, self.lon, self._place_name = self._saved_place()
         self.sel = None                      # выбранный вид или None = лучший
                                              # (восстанавливается ниже из prefs)
         root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
 
         # --- строка места ---
         top = BoxLayout(size_hint_y=None, height=TOUCH, spacing=dp(6))
-        self.btn_place = Button(text="Фрязино", font_size=sp(15), halign="left",
+        self.btn_place = Button(text=self._place_name, font_size=sp(15), halign="left",
                                 valign="middle", background_normal="",
                                 background_color=CARD, color=INK)
         self.btn_place.bind(size=lambda w, v: setattr(w, "text_size",
@@ -648,7 +683,7 @@ class MushroomApp(App):
         if not walk.points and not walk.finds:
             return
         counts = walk.species_counts()
-        rows = [f"[b]{walk.summary()}[/b]", ""]
+        rows = [f"[b]{markup.esc(walk.summary())}[/b]", ""]
         if counts:
             rows.append("Находки:")
             for key, n in counts.items():
@@ -657,7 +692,7 @@ class MushroomApp(App):
         else:
             rows.append("Находок не отмечено.")
         if saved:
-            rows += ["", f"[size=11sp][color=7b8272]{saved}[/color][/size]"]
+            rows += ["", f"[size=11sp][color=7b8272]{markup.esc(saved)}[/color][/size]"]
         if counts:
             try:
                 import journal
@@ -667,7 +702,7 @@ class MushroomApp(App):
                 rows += ["", f"[size=11sp][color=7b8272]Записано в журнал "
                              f"наблюдений строк: {n}[/color][/size]"]
             except Exception as e:                                # noqa: BLE001
-                rows += ["", f"[size=11sp][color=a8564f]Журнал: {e}[/color][/size]"]
+                rows += ["", f"[size=11sp][color=a8564f]Журнал: {markup.esc(e)}[/color][/size]"]
         self._sheet("Итоги похода", "\n".join(rows), 0.6)
 
     def pick_place(self):
@@ -683,6 +718,7 @@ class MushroomApp(App):
             bio = engine.BIOTOPES.get(spot.biotope)
             if bio:
                 self.sp_bio.text = bio.name
+        self._remember_place()
         self.calculate()
 
     def _reload_spots(self):
@@ -714,6 +750,7 @@ class MushroomApp(App):
         """Переход на сохранённое место одним касанием."""
         self.lat, self.lon = spot.lat, spot.lon
         self.btn_place.text = spot.name
+        self._remember_place(spot.name)
         bio = engine.BIOTOPES.get(spot.biotope)
         if bio and self.sp_bio.text != bio.name:
             self.sp_bio.text = bio.name      # пересчёт индекса без сети
@@ -760,6 +797,33 @@ class MushroomApp(App):
         ok.bind(on_release=do_save)
         cancel.bind(on_release=lambda *_: pop.dismiss())
         pop.open()
+
+    #: Место по умолчанию для самого первого запуска.
+    HOME = (55.9606, 38.0456, "Фрязино")
+
+    @classmethod
+    def _saved_place(cls):
+        """Место с прошлого запуска: (широта, долгота, подпись).
+
+        Координаты проверяются на осмысленность: испорченный файл настроек
+        не должен унести человека в Атлантику, где прогноз считается вечно
+        и ничем не кончается.
+        """
+        saved = prefs.load()
+        try:
+            lat = float(saved["lat"])
+            lon = float(saved["lon"])
+        except (KeyError, TypeError, ValueError):
+            return cls.HOME
+        if not (-85.0 <= lat <= 85.0 and -180.0 <= lon <= 180.0):
+            return cls.HOME
+        name = saved.get("place") or f"{lat:.4f}, {lon:.4f}"
+        return lat, lon, str(name)[:60]
+
+    def _remember_place(self, name=None):
+        """Запоминает текущую точку. Вызывается после любого её изменения."""
+        prefs.save(lat=round(self.lat, 6), lon=round(self.lon, 6),
+                   place=name or self.btn_place.text)
 
     #: Подпись «любой вид» в списке. Пустой sel означает то же самое.
     ALL_KINDS = "Все виды сезона"
@@ -879,6 +943,7 @@ class MushroomApp(App):
         self.lat, self.lon = float(lat), float(lon)
         self.btn_place.text = f"Моё положение · {self.lat:.4f}, {self.lon:.4f}"
         self.status.text = "Координаты определены"
+        self._remember_place()
         self.calculate()
 
     def _sheet(self, title, text, height=0.88):

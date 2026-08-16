@@ -32,6 +32,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.utils import get_color_from_hex as hexc
 
 import mushroom_forecast as engine
+import markup
 import palette
 import photos as photos_mod
 import track as track_mod
@@ -140,7 +141,7 @@ class WalkCard(Popup):
         box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
         _fill(box, CARD)
 
-        head = _wrapping(Label(text=f"[b]{walk.place or 'без названия'}[/b]\n"
+        head = _wrapping(Label(text=f"[b]{markup.esc(walk.place or 'без названия')}[/b]\n"
                                     f"{stats_line(walk)}",
                                markup=True, font_size=sp(13), color=INK))
         box.add_widget(head)
@@ -327,7 +328,7 @@ class WalkJournal(Popup):
         журнал и открывают.
         """
         hint = palette.MUTED.lstrip("#")
-        rows = [f"[b]{walk.place or 'без названия'}[/b]  "
+        rows = [f"[b]{markup.esc(walk.place or 'без названия')}[/b]  "
                 f"[size=11sp][color={hint}]{when_text(walk)}[/color][/size]"]
         species = species_line(walk)
         if species:

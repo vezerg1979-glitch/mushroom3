@@ -133,7 +133,7 @@ class Walk:
             return (f"Сигнал слабый (точность {self.last_acc:.0f} м) — "
                     f"жду, пока приёмник соберёт спутники")
         if self.rough and self.rough * 3 >= len(self.points):
-            return f"Сигнал неуверенный: линия маршрута будет грубой"
+            return "Сигнал неуверенный: линия маршрута будет грубой"
         return ""
 
     def add_find(self, lat, lon, species="", count=1, note="", photos=None) -> Find:

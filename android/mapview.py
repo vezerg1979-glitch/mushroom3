@@ -187,6 +187,44 @@ class TileMap(Widget):
             self.on_pick(lat, lon)
         self.redraw()
 
+    def fit(self, points, pad=0.18, max_zoom=MAX_Z) -> bool:
+        """Подбирает центр и масштаб так, чтобы все точки попали на экран.
+
+        Отвечает на вопрос «где я относительно машины», который иначе решается
+        прокруткой карты пальцем — а прокрутив, человек теряет своё положение
+        и включает слежение обратно.
+
+        pad — доля пустого поля по краям: точка вплотную к рамке наполовину
+        срезается собственным значком.
+        """
+        pts = [(float(a), float(b)) for a, b in points if a is not None]
+        if not pts or self.width <= 1 or self.height <= 1:
+            return False
+        lo_lat = min(p[0] for p in pts)
+        hi_lat = max(p[0] for p in pts)
+        lo_lon = min(p[1] for p in pts)
+        hi_lon = max(p[1] for p in pts)
+
+        best = MIN_Z
+        for z in range(MIN_Z, min(int(max_zoom), MAX_Z) + 1):
+            x0, y0 = deg2num(hi_lat, lo_lon, z)          # верхний левый угол
+            x1, y1 = deg2num(lo_lat, hi_lon, z)
+            w = (x1 - x0) * TILE
+            h = (y1 - y0) * TILE
+            if w <= self.width * (1 - pad) and h <= self.height * (1 - pad):
+                best = z
+            else:
+                break
+        self.zoom = best
+        # Центр считается в координатах проекции, а не как среднее широт:
+        # у Меркатора градус широты по высоте не постоянен, и трек, вытянутый
+        # с севера на юг, уезжал бы вниз экрана.
+        x0, y0 = deg2num(hi_lat, lo_lon, best)
+        x1, y1 = deg2num(lo_lat, hi_lon, best)
+        self.cx, self.cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        self.redraw()
+        return True
+
     def zoom_by(self, step):
         lat, lon = self._latlon(self.center_x, self.center_y)
         self.zoom = max(MIN_Z, min(MAX_Z, self.zoom + step))

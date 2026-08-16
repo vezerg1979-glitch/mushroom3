@@ -38,9 +38,11 @@ import compass as compass_mod
 import nav
 import walk2journal
 import service_ctl
+import sun
 import track as track_mod
 import tracklog
 import photos as photos_mod
+import power
 from finddialog import FindDialog
 from mapview import TileMap
 from navwidget import NavArrow
@@ -51,6 +53,7 @@ CARD = hexc(palette.CARD)
 ACCENT = hexc(palette.ACCENT)
 RED = hexc(palette.RED)
 BLUE = hexc(palette.BLUE)
+FADED = hexc(palette.FADED)
 
 # Сколько ждать признаков жизни от фонового сервиса, секунды. Ожидание
 # неблокирующее: окно всё это время остаётся отзывчивым.
@@ -89,6 +92,9 @@ class WalkScreen(Popup):
 
     def __init__(self, lat, lon, biotope="смешанный", place="", on_close=None, **kw):
         self.walk = track_mod.Walk(place=place, biotope=biotope)
+        self._start_at = (lat, lon)        # чем считать закат до первой точки
+        self._dusk_warned = False
+        self._battery_warned = 0           # порог, о котором уже сказали
         self.on_close = on_close
         self.running = False
         self._gps_on = False
@@ -117,7 +123,12 @@ class WalkScreen(Popup):
         self.c_dist = Counter("метров", "0", BLUE)
         self.c_time = Counter("в пути", "0 мин")
         self.c_finds = Counter("находок", "0", RED)
-        for c in (self.c_dist, self.c_time, self.c_finds):
+        # Время до заката — второе по важности число после расстояния до
+        # машины. Темнеет незаметно: под пологом ельника сумерки начинаются
+        # за полчаса до заката, а грибник в это время как раз входит во вкус.
+        # Считается арифметикой по координатам и дате, без сети и разрешений.
+        self.c_sun = Counter("до заката", "—")
+        for c in (self.c_dist, self.c_time, self.c_finds, self.c_sun):
             top.add_widget(c)
         root.add_widget(top)
 
@@ -145,14 +156,29 @@ class WalkScreen(Popup):
         self.map.size_hint = (1, 1)
         self.map.pos_hint = {"x": 0, "y": 0}
         map_box.add_widget(self.map)
-        for i, (txt, step) in enumerate((("+", 1), ("−", -1))):
+
+        # Кнопки собраны в столбик фиксированной высоты, а не расставлены
+        # долями экрана: доля от невысокой карты (маленький телефон, открытая
+        # полоса навигации) даёт промежуток меньше самой кнопки, и они
+        # налезают друг на друга. Столбику это безразлично.
+        side = BoxLayout(orientation="vertical", spacing=dp(6),
+                         size_hint=(None, None),
+                         size=(dp(44), dp(44) * 3 + dp(12)),
+                         pos_hint={"right": 0.98, "top": 0.98})
+        for txt, step in (("+", 1), ("−", -1)):
             b = Button(text=txt, font_size=sp(20), bold=True,
-                       size_hint=(None, None), size=(dp(44), dp(44)),
-                       pos_hint={"right": 0.98, "top": 0.98 - i * 0.115},
                        background_normal="", background_color=(1, 1, 1, 0.85),
                        color=INK)
             b.bind(on_release=lambda _b, st=step: self.map.zoom_by(st))
-            map_box.add_widget(b)
+            side.add_widget(b)
+        # Переключатель прошлых походов стоит тут же, на карте, а не в ряду
+        # кнопок внизу: его действие видно прямо под пальцем, и ряд остаётся
+        # трёхкнопочным — подписи в четыре кнопки на 360 dp уже обрезаются.
+        self.b_hist = icons.IconButton(icon="journal", color=INK,
+                                       bg=(1, 1, 1, 0.85))
+        self.b_hist.bind(on_release=lambda *_: self.toggle_history())
+        side.add_widget(self.b_hist)
+        map_box.add_widget(side)
         root.add_widget(map_box)
 
         self.arrow = NavArrow(size_hint_y=None, height=0)
@@ -211,13 +237,12 @@ class WalkScreen(Popup):
         self.b_nav = small("К машине", self.toggle_nav)
         row1.add_widget(self.b_follow)
         row1.add_widget(self.b_nav)
-        row1.add_widget(small("Заметка и фото", self.edit_last_find))
+        row1.add_widget(small("Весь поход", self.fit_walk))
         root.add_widget(row1)
 
         row2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        row2.add_widget(small("Заметка и фото", self.edit_last_find))
         row2.add_widget(small("Приём и сервис", self.show_service_log, MUTED))
-        self.b_hist = small("История: вкл", self.toggle_history)
-        row2.add_widget(self.b_hist)
         row2.add_widget(small("Закрыть поход", self.finish))
         root.add_widget(row2)
 
@@ -283,7 +308,12 @@ class WalkScreen(Popup):
         сегодняшний трек в них теряется — а он нужнее всего.
         """
         self.map.show_history = not self.map.show_history
-        self.b_hist.text = f"История: {'вкл' if self.map.show_history else 'выкл'}"
+        # Выключенный слой показывает выцветший значок: подписи у кнопки на
+        # карте нет, и состояние должно читаться самим значком.
+        self.b_hist.color = INK if self.map.show_history else FADED
+        self.b_hist.redraw()
+        self.hint.text = ("Прошлые походы показаны" if self.map.show_history
+                          else "Прошлые походы скрыты")
         self.map.redraw()
 
     def _show_spot(self, spot):
@@ -310,17 +340,53 @@ class WalkScreen(Popup):
         btns = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
         go = Button(text="Идти сюда", font_size=sp(15), bold=True,
                     background_normal="", background_color=BLUE)
+        # Грибной угол, к которому стоит вернуться, должен уметь стать местом
+        # с именем и собственным прогнозом. Иначе точка живёт только внутри
+        # похода: увидеть её со стартового экрана и посчитать по ней погоду
+        # нельзя, а именно за этим человек сюда и вернётся в следующий раз.
+        keep = Button(text="В мои места", font_size=sp(15), background_normal="",
+                      background_color=hexc(palette.SOFT), color=INK)
         close = Button(text="Закрыть", font_size=sp(15), background_normal="",
-                       background_color=hexc(palette.SOFT), color=INK)
+                       background_color=hexc(palette.SOFT), color=MUTED)
         btns.add_widget(go)
+        btns.add_widget(keep)
         btns.add_widget(close)
         box.add_widget(btns)
 
         pop = Popup(title="Здесь уже брали", content=box, size_hint=(0.9, None),
-                    height=dp(230), separator_color=BLUE, title_size=sp(15))
+                    height=dp(240), separator_color=BLUE, title_size=sp(15))
         go.bind(on_release=lambda *_: (pop.dismiss(), self._go_to_spot(spot)))
+        keep.bind(on_release=lambda *_: (pop.dismiss(), self._keep_spot(spot)))
         close.bind(on_release=lambda *_: pop.dismiss())
         pop.open()
+
+    def spot_name(self, spot) -> str:
+        """Имя для нового места: вид и дата — «Белый гриб, 24.08.2025».
+
+        Имя предлагается готовым, а не запрашивается: ввод текста стоя в лесу
+        с мокрыми руками — это гарантия, что место не сохранят вовсе.
+        Переименовать его можно дома, на большом экране.
+        """
+        sp_obj = engine.SPECIES.get(spot.species)
+        head = sp_obj.name if sp_obj else "Грибное место"
+        if spot.last_t:
+            return f"{head}, {datetime.fromtimestamp(spot.last_t):%d.%m.%Y}"
+        return head
+
+    def _keep_spot(self, spot):
+        """Сохраняет старую находку как место с прогнозом."""
+        import places as places_mod
+
+        name = self.spot_name(spot)
+        try:
+            places_mod.add(places_mod.Spot(name, spot.lat, spot.lon,
+                                           biotope=self.walk.biotope))
+        except OSError as e:
+            self.hint.text = f"Не удалось сохранить место: {e}"
+            return
+        buzz.tap()
+        self.hint.text = (f"Место «{name}» сохранено — оно появится строкой "
+                          f"под названием на главном экране.")
 
     def _go_to_spot(self, spot):
         """Навигация к старому месту.
@@ -349,6 +415,25 @@ class WalkScreen(Popup):
         else:
             self._keep_screen(False)
             self.hint.text = "Пауза. Метры не считаются."
+
+    def fit_walk(self):
+        """Вписывает весь маршрут в экран: где я относительно машины.
+
+        Слежение при этом выключается — иначе первая же пришедшая координата
+        вернёт карту на своё положение, и человек не успеет посмотреть.
+        """
+        pts = [(p.lat, p.lon) for p in self.walk.points]
+        pts += [(f.lat, f.lon) for f in self.walk.finds]
+        if self.map.here:
+            pts.append(self.map.here)
+        if len(pts) < 2:
+            self.hint.text = ("Показывать пока нечего: маршрут не начат. "
+                              "Нажмите «Старт».")
+            return
+        self.map.follow = False
+        self.b_follow.text = "Слежение: выкл"
+        if self.map.fit(pts):
+            self.hint.text = "Весь поход на экране. «Слежение» вернёт карту к вам."
 
     def toggle_follow(self):
         self.map.follow = not self.map.follow
@@ -743,6 +828,41 @@ class WalkScreen(Popup):
         self.c_time.set(f"{h} ч {m} мин" if h else f"{m} мин")
         self.c_finds.set(str(len(self.walk.finds)))
         self.b_undo.disabled = not self.walk.finds
+        self._refresh_dusk()
+        self._check_battery()
+
+    def _check_battery(self):
+        """Предупреждение о разряде: один раз на порог.
+
+        Показывается только во время записи. До «Старта» человек ещё у
+        машины, где есть зарядка, и пугать его там незачем.
+        """
+        if not self.running:
+            return
+        text, level = power.warning(power.level(), self._battery_warned)
+        if not text:
+            return
+        self._battery_warned = level
+        self.hint.text = text
+        buzz.long()
+
+    def _refresh_dusk(self):
+        """Счётчик «до заката» и единственное предупреждение.
+
+        Предупреждение показывается один раз: подсказка под картой одна на
+        всё, и повторяясь каждую секунду, она затирала бы состояние приёма
+        и сообщения о метках.
+        """
+        left = sun.seconds_to_sunset(*(self.map.here or self._start_at))
+        self.c_sun.set(sun.text(left))
+        dusk = left is not None and left <= sun.WARN_S
+        self.c_sun.lbl.color = RED if dusk else INK
+        if dusk and left > 0 and not self._dusk_warned:
+            self._dusk_warned = True
+            buzz.long()
+            mins = int(left // 60)
+            self.hint.text = (f"До заката {mins} мин. В лесу темнеет раньше — "
+                              f"пора выходить к машине.")
 
     def show_service_log(self):
         """Диагностика: что именно происходит с фоновой записью."""

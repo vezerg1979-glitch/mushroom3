@@ -241,9 +241,12 @@ def apply_calibration(data: dict) -> None:
         sp = SPECIES.get(key)
         if sp is None:
             continue
-        for field, value in over.items():
-            if hasattr(sp, field) and field != "months":
-                setattr(sp, field, type(getattr(sp, field))(value))
+        # Имя переменной не field: так называется импортированная из
+        # dataclasses функция, и затенять её в модуле с датаклассами —
+        # заготовка для ошибки, которую будут искать долго.
+        for attr, value in over.items():
+            if hasattr(sp, attr) and attr != "months":
+                setattr(sp, attr, type(getattr(sp, attr))(value))
     global CALIBRATION
     CALIBRATION = data
 
@@ -811,7 +814,7 @@ def report(place: Place, days: list[Day], forecast_days: int,
     ts = soil_temperature(days)
     table = {sp.name: species_index(sp, days, m, ts) for sp in chosen}
 
-    print(f"\n  ПРОГНОЗ ПЛОДОНОШЕНИЯ ГРИБОВ")
+    print("\n  ПРОГНОЗ ПЛОДОНОШЕНИЯ ГРИБОВ")
     print(f"  {place.name}   ({place.lat:.3f}, {place.lon:.3f})")
     print(f"  расчёт на {days[today_idx].d.strftime('%d.%m.%Y')}")
     print("=" * 74)
@@ -849,7 +852,7 @@ def report(place: Place, days: list[Day], forecast_days: int,
     p14 = sum(days[j].precip for j in range(max(0, today_idx - 13), today_idx + 1))
     print(f"  Влагозапас подстилки .... {m[today_idx]*100:.0f}% от ёмкости ({m[today_idx]*CAPACITY_MM:.0f} мм)")
     print(f"  Осадки за 14 суток ...... {p14:.1f} мм")
-    print(f"  Последний дождь ≥5 мм ... " + (f"{dsr} сут назад" if dsr is not None else "не было за месяц"))
+    print("  Последний дождь ≥5 мм ... " + (f"{dsr} сут назад" if dsr is not None else "не было за месяц"))
     print(f"  Температура почвы ....... {ts[today_idx]:.1f} °C")
     src_w, src_t = sources(days)
     print(f"  Источник влаги .......... {src_w}")
@@ -866,9 +869,9 @@ def report(place: Place, days: list[Day], forecast_days: int,
         print(f"\n  ➜ Лучший день из ближайших: {best_day.d.strftime('%d.%m')} "
               f"({best_val:.0f}, {level(best_val)}).")
     elif best_val >= 18:
-        print(f"\n  ➜ Ближайшие дни — только единичные находки.")
+        print("\n  ➜ Ближайшие дни — только единичные находки.")
     else:
-        print(f"\n  ➜ В ближайшие дни выхода не ожидается.")
+        print("\n  ➜ В ближайшие дни выхода не ожидается.")
 
     notes = [sp for sp in chosen if sp.note]
     if notes:
