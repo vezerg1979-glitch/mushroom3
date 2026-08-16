@@ -61,6 +61,7 @@ from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
 import donate
+import icons
 import mushroom_forecast as engine
 import palette
 import places as places_mod
@@ -436,9 +437,10 @@ class MushroomApp(App):
                         color=MUTED)
         b_help.bind(on_release=lambda *_: self.show_help())
         top.add_widget(b_help)
-        b_heart = Button(text="♥", size_hint_x=None, width=TOUCH, font_size=sp(16),
-                         bold=True, background_normal="", background_color=CARD,
-                         color=hexc(palette.RED))
+        # Значок рисуется линиями, а не буквой: символа «♥» в шрифте Kivy на
+        # Android нет, и вместо сердца на кнопке был пустой квадрат.
+        b_heart = icons.IconButton(icon="heart", color=hexc(palette.RED),
+                                   bg=CARD, size_hint_x=None, width=TOUCH)
         b_heart.bind(on_release=lambda *_: donate.show())
         top.add_widget(b_heart)
         root.add_widget(top)
@@ -475,10 +477,10 @@ class MushroomApp(App):
         row2.add_widget(b_walk)
         # Журнал стоит рядом с «В лес» не случайно: это две стороны одного
         # дела — сходить и посмотреть, как ходил раньше. Значок вместо
-        # надписи, потому что строка уже занята «Прогнозом».
-        b_log = Button(text="≡", size_hint_x=None, width=TOUCH, font_size=sp(20),
-                       bold=True, background_normal="", background_color=CARD,
-                       color=INK)
+        # надписи, потому что строка уже занята «Прогнозом»; сам значок —
+        # из icons.py, на шрифт полагаться нельзя (см. кнопку доната).
+        b_log = icons.IconButton(icon="journal", color=INK, bg=CARD,
+                                 size_hint_x=None, width=TOUCH)
         b_log.bind(on_release=lambda *_: self.show_walk_journal())
         row2.add_widget(b_log)
         root.add_widget(row2)
