@@ -57,6 +57,8 @@ def test_sbp_hidden_until_filled(monkeypatch):
     """Пустые реквизиты не должны показываться пустым местом."""
     monkeypatch.setattr(donate, "SBP_PHONE", "")
     monkeypatch.setattr(donate, "SBP_BANK", "")
+    monkeypatch.setattr(donate, "SBP_LINK", "")
+    monkeypatch.setattr(donate, "SBP_QR_LINK", "")
     assert not donate.sbp_ready()
     assert "СБП" not in donate.text()
 
@@ -87,10 +89,19 @@ def test_short_phone_rejected(monkeypatch):
 #  Текст
 # --------------------------------------------------------------------------- #
 
-def test_text_contains_card_and_amount():
+def test_text_explains_why_the_app_exists():
+    """Окно доната — единственное место, где автор говорит от себя.
+
+    Просьба о деньгах без объяснения, зачем всё это, читается как реклама.
+    Поэтому текст начинается с того, откуда приложение взялось, и только
+    потом переходит к реквизитам.
+    """
     t = donate.text()
     assert donate.CARD in t
-    assert "ста рублей" in t.lower()
+    low = t.lower()
+    assert "для себя" in low, "нет объяснения, откуда приложение"
+    assert "без сети" in low, "не сказано, чем оно полезно потерявшемуся"
+    assert low.index("для себя") < low.index(donate.CARD.lower())
 
 
 def test_text_promises_no_ads_or_paywall():
@@ -359,3 +370,71 @@ def test_all_three_ways_are_offered():
     assert donate.phone_pretty() in t
     assert donate.CARD in t
     assert donate.ACCOUNT in t
+
+
+# --------------------------------------------------------------------------- #
+#  Ссылка конкретного банка и QR
+# --------------------------------------------------------------------------- #
+#
+# Формат платёжной ссылки у каждого банка свой: НСПК выдаёт qr.nspk.ru/AS1000…,
+# Озон — finance.ozon.ru/apps/sbp/ozonbankpay/… с косыми чертами в пути.
+# Проверка, написанная под один формат, молча отвергала бы второй, и кнопка
+# оплаты просто не появлялась бы — без единого сообщения.
+
+def test_configured_link_is_accepted():
+    assert donate.link_ok(), f"настроенная ссылка не проходит проверку: {donate.SBP_LINK}"
+    assert donate.sbp_link() == donate.SBP_LINK
+
+
+def test_link_names_its_bank():
+    assert donate.link_bank() == "Озон Банк"
+    assert donate.link_bank("https://qr.nspk.ru/AS10003P3RH0LJ2A9ROO") == "СБП"
+    assert donate.link_bank("https://example.com/что-то") == ""
+
+
+@pytest.mark.parametrize("url", [
+    "https://finance.ozon.ru/apps/sbp/ozonbankpay/01a00bc5-dd2b-7b0b-875e-6805ddfff2ae",
+    "https://qr.nspk.ru/AS10003P3RH0LJ2A9ROO038L6NT5RU1M",
+    "https://sub.nspk.ru/AS1R004PRL5RNGBA9ARPLJLTDO94S3J9",
+])
+def test_real_bank_links_accepted(url):
+    assert donate.link_ok(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://finance.ozon.ru/",                       # витрина банка, не перевод
+    "https://finance.ozon.ru/apps",                   # путь слишком короткий
+    "https://finance.ozon.ru.example.com/apps/sbp/12345678",   # похожий чужой хост
+    "http://finance.ozon.ru/apps/sbp/ozonbankpay/01a0",        # без шифрования
+    "https://example.com/apps/sbp/ozonbankpay/01a00bc5",
+])
+def test_wrong_bank_links_rejected(url):
+    assert not donate.link_ok(url)
+
+
+def test_window_text_names_the_bank():
+    assert "Озон Банк" in donate.text()
+
+
+def test_qr_image_ships_with_the_app():
+    """Картинка QR нужна не себе: свой экран не отсканируешь."""
+    path = donate.qr_path()
+    assert path, "файл QR не найден рядом с кодом"
+    assert os.path.getsize(path) > 1000
+
+
+def test_qr_matches_the_link():
+    """Картинка и ссылка должны вести в одно место.
+
+    Разойтись им проще простого: банк перевыпустил код, ссылку в файле
+    поправили, а картинку забыли — и человек, отсканировавший QR, переведёт
+    деньги неизвестно куда.
+    """
+    try:
+        import zxingcpp
+        from PIL import Image
+    except ImportError:
+        pytest.skip("нет декодера QR")
+    found = zxingcpp.read_barcodes(Image.open(donate.qr_path()))
+    assert found, "QR не читается"
+    assert found[0].text == donate.SBP_LINK

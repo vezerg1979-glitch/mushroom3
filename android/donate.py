@@ -27,19 +27,28 @@ import palette
 #  Реквизиты
 # --------------------------------------------------------------------------- #
 
-# Платёжная ссылка СБП. Выдаётся банком самозанятым и ИП вместе со
-# статическим QR и имеет вид https://qr.nspk.ru/AS10003P3RH0LJ2A9ROO038L6NT5RU1M
-# Ссылка полностью заменяет QR: телефон открывает по ней приложение банка
-# сразу на экране перевода. Пустая строка — кнопка не показывается.
+# Платёжная ссылка. Это то же самое, что зашито в статический QR банка:
+# телефон открывает по ней приложение банка сразу на экране перевода, а
+# сканировать собственный экран нельзя — поэтому ссылка удобнее QR.
+#
+# Здесь ссылка Озон Банка. Формат у каждого банка свой: НСПК выдаёт
+# qr.nspk.ru/AS1000…, Озон — finance.ozon.ru/apps/sbp/ozonbankpay/…
+# Список допустимых хостов — в PAY_HOSTS ниже. Пустая строка — кнопка не
+# показывается.
 #
 # ВАЖНО: ссылку нельзя дописывать руками. В расширенном виде она содержит
 # параметр crc — контрольную сумму по всей строке, и приложение банка её
 # проверяет. Добавив к ссылке свою сумму (?sum=10000), вы получите отказ
 # в оплате. Сумму человек указывает сам в приложении банка.
-SBP_LINK = ""
+SBP_LINK = "https://finance.ozon.ru/apps/sbp/ozonbankpay/01a00bc5-dd2b-7b0b-875e-6805ddfff2ae"
 
 # Старое имя той же настройки. Оставлено, чтобы не ломать чужие сборки.
 SBP_QR_LINK = ""
+
+# Картинка того же QR — лежит рядом с кодом. Нужна не себе, а другому
+# человеку: со своего экрана QR не отсканируешь, а показать телефон
+# приятелю в лесу или вывести код на большой экран — вполне.
+QR_IMAGE = "donate-qr.png"
 
 # Телефон для перевода по СБП, в формате +7XXXXXXXXXX.
 SBP_PHONE = "+79261572965"
@@ -77,15 +86,20 @@ PURPOSE = "Перевод денежных средств. НДС не обла�
 
 TITLE = "Поддержать проект"
 
-INTRO = """Если программа вам пригодилась и вы хотите, чтобы она развивалась,
-поддержите её донатом. Ста рублей достаточно, чтобы работа продолжалась:
-из этого складывается время на новые виды грибов, уточнение модели по
-реальным находкам и офлайн-карты."""
+INTRO = """Это приложение я делал для себя. Ходить с ним в лес оказалось
+настолько спокойнее, что я решил им поделиться: польза здесь не только
+грибная. Карта, маршрут и стрелка к машине работают без сети, и человек,
+который в лесу теряется, в любой момент видит, где он и как выйти обратно.
+Свои грибные места при этом никуда не деваются — они остаются на телефоне
+и больше не забываются к следующему сезону."""
 
-OUTRO = """Приложение бесплатное и останется бесплатным. Никакой рекламы,
-платных функций и сбора данных о вас здесь нет и не будет.
+OUTRO = """Приложение бесплатное и таким останется. Рекламы, платных функций
+и сбора данных о вас здесь нет и не будет.
 
-Спасибо всем, кто поддержал. Хорошего слоя."""
+Если пригодилось и хочется поддержать — любая сумма идёт на время: новые
+виды грибов, уточнение модели по реальным находкам, офлайн-карты.
+
+Спасибо всем, кто поддержал. И хорошего слоя."""
 
 
 # --------------------------------------------------------------------------- #
@@ -148,28 +162,56 @@ def sbp_ready() -> bool:
 
 # Хосты Системы быстрых платежей. qr.nspk.ru — статические и динамические
 # коды, sub.nspk.ru — подписочные, b2b.cbrpay.ru — платежи между юрлицами.
-SBP_HOSTS = ("qr.nspk.ru", "sub.nspk.ru", "b2b.cbrpay.ru")
+# Хосты, с которых бывают платёжные ссылки, и чьи они. Название нужно не
+# для красоты: кнопка «Оплатить через Озон Банк» честнее, чем «через СБП»,
+# когда ссылка ведёт в конкретный банк, а не в общий переключатель НСПК.
+#
+# qr.nspk.ru и sub.nspk.ru — Система быстрых платежей, b2b.cbrpay.ru —
+# расчёты между юрлицами, finance.ozon.ru — ссылки Озон Банка.
+PAY_HOSTS = {
+    "qr.nspk.ru": "СБП",
+    "sub.nspk.ru": "СБП",
+    "b2b.cbrpay.ru": "СБП",
+    "finance.ozon.ru": "Озон Банк",
+}
+
+# Старое имя. Осталось у тестов и у чужих сборок.
+SBP_HOSTS = tuple(PAY_HOSTS)
+
+# Из чего может состоять путь после хоста. Пусто или один-два знака —
+# это адрес заглавной страницы банка, а не перевода.
+_PATH_OK = set("abcdefghijklmnopqrstuvwxyz0123456789-_./")
+
+
+def link_host(url: str = None) -> str:
+    u = ((SBP_LINK or SBP_QR_LINK) if url is None else url or "").strip()
+    if not u.startswith("https://"):
+        return ""
+    return u[len("https://"):].split("/", 1)[0].split("?", 1)[0].lower()
 
 
 def link_ok(url: str = None) -> bool:
-    """Похожа ли строка на настоящую платёжную ссылку СБП.
+    """Похожа ли строка на настоящую платёжную ссылку.
 
     Проверка нужна не от злого умысла, а от опечатки при переносе ссылки
-    из письма банка: кнопка «Оплатить через СБП», ведущая на посторонний
-    сайт, — худшее, что может случиться в окне про деньги.
+    из письма банка: кнопка про деньги, ведущая на посторонний сайт, —
+    худшее, что может случиться в этом окне.
     """
-    u = (SBP_LINK or SBP_QR_LINK) if url is None else url
-    u = (u or "").strip()
-    if not u.startswith("https://"):
+    u = ((SBP_LINK or SBP_QR_LINK) if url is None else url or "").strip()
+    host = link_host(u)
+    if host not in PAY_HOSTS:
         return False
-    host = u[len("https://"):].split("/", 1)[0].split("?", 1)[0].lower()
-    if host not in SBP_HOSTS:
+    # После хоста обязателен путь: сам по себе qr.nspk.ru ведёт на страницу
+    # НСПК, а finance.ozon.ru — на витрину банка, но не на перевод.
+    path = u[len("https://") + len(host):].lstrip("/").split("?", 1)[0]
+    if len(path) < 8:
         return False
-    rest = u[len("https://") + len(host):]
-    # После хоста обязателен идентификатор ссылки: сам по себе qr.nspk.ru
-    # ведёт на страницу НСПК, а не на перевод.
-    ident = rest.lstrip("/").split("?", 1)[0]
-    return len(ident) >= 8 and ident.replace("-", "").replace("_", "").isalnum()
+    return set(path.lower()) <= _PATH_OK
+
+
+def link_bank(url: str = None) -> str:
+    """Чья это ссылка — для подписи на кнопке."""
+    return PAY_HOSTS.get(link_host(url), "")
 
 
 def sbp_link() -> str:
@@ -292,11 +334,12 @@ def text() -> str:
     hint = MUTED_HEX.lstrip("#")
     parts = [INTRO, ""]
     if sbp_link():
-        parts += ["[b]Оплата через СБП[/b] — одно касание, приложение банка "
-                  "откроется само:",
+        parts += [f"[b]Оплата через {link_bank() or 'СБП'}[/b] — одно "
+                  "касание, приложение банка откроется само:",
                   "",
                   f"[size=11sp][color={hint}]Сумму укажете там же. "
-                  "Комиссии за перевод по СБП нет.[/color][/size]",
+                  "Комиссии за перевод по СБП нет. Рядом — тот же QR: "
+                  "его можно показать другому телефону.[/color][/size]",
                   ""]
     if sbp_ready():
         parts += ["[b]Перевод по СБП[/b] — по номеру телефона, три касания:",
@@ -346,6 +389,46 @@ def copy(value: str) -> bool:
         return True
     except Exception:                                             # noqa: BLE001
         return False
+
+
+def qr_path() -> str:
+    """Файл с картинкой QR рядом с кодом, или пустая строка.
+
+    Проверка существования, а не просто имя: файл могли не положить в
+    сборку, и кнопка «Показать QR», открывающая пустоту, хуже её отсутствия.
+    """
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), QR_IMAGE)
+    return path if QR_IMAGE and os.path.isfile(path) else ""
+
+
+def show_qr():
+    """QR во весь экран — чтобы его отсканировал другой телефон."""
+    path = qr_path()
+    if not path:
+        return None
+    from kivy.metrics import dp, sp
+    from kivy.uix.boxlayout import BoxLayout
+    from kivy.uix.button import Button
+    from kivy.uix.image import Image
+    from kivy.uix.label import Label
+    from kivy.uix.popup import Popup
+    from kivy.utils import get_color_from_hex as hexc
+
+    box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+    box.add_widget(Image(source=path, fit_mode="contain"))
+    box.add_widget(Label(text=f"{link_bank() or 'СБП'} · {RECIPIENT}",
+                         font_size=sp(12), color=hexc(MUTED_HEX),
+                         size_hint_y=None, height=dp(20)))
+    pop = Popup(title="Код для перевода", content=box, size_hint=(0.94, 0.8),
+                title_size=sp(14), separator_color=hexc(ACCENT_HEX))
+    close = Button(text="Закрыть", size_hint_y=None, height=dp(44),
+                   font_size=sp(14), background_normal="",
+                   background_color=hexc(SOFT_HEX), color=hexc(INK_HEX))
+    close.bind(on_release=lambda *_: pop.dismiss())
+    box.add_widget(close)
+    pop.open()
+    return pop
 
 
 def open_url(url: str) -> bool:
@@ -435,7 +518,8 @@ def show():
     # --- главное действие: платёжная ссылка СБП ---------------------------
     link = sbp_link()
     if link:
-        b_pay = Button(text="Оплатить через СБП", font_size=sp(16), bold=True,
+        b_pay = Button(text=f"Оплатить через {link_bank() or 'СБП'}",
+                       font_size=sp(16), bold=True,
                        size_hint_y=None, height=dp(52), background_normal="",
                        background_color=ACCENT, color=ON_DARK)
         b_pay.bind(on_release=lambda *_: announce(
@@ -444,14 +528,22 @@ def show():
             "Не нашлось приложения для этой ссылки — скопируйте её"))
         box.add_widget(b_pay)
 
-        b_link = Button(text="Скопировать ссылку СБП", font_size=sp(13),
-                        size_hint_y=None, height=dp(42), background_normal="",
-                        background_color=SOFT, color=INK)
+        row_link = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        b_link = Button(text="Скопировать ссылку", font_size=sp(13),
+                        background_normal="", background_color=SOFT, color=INK)
         b_link.bind(on_release=lambda *_: announce(
             copy(link),
             "Ссылка в буфере — откройте её в приложении банка",
             "Не удалось скопировать ссылку"))
-        box.add_widget(b_link)
+        row_link.add_widget(b_link)
+        if qr_path():
+            # Свой экран не отсканируешь, поэтому QR нужен не себе: показать
+            # телефон другому человеку или вывести код на большой экран.
+            b_qr = Button(text="Показать QR", font_size=sp(13),
+                          background_normal="", background_color=SOFT, color=INK)
+            b_qr.bind(on_release=lambda *_: show_qr())
+            row_link.add_widget(b_qr)
+        box.add_widget(row_link)
 
     # --- перевод по номеру телефона ---------------------------------------
     if sbp_ready():
