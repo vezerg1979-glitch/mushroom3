@@ -12,7 +12,9 @@ walkscreen.py — режим похода: запись маршрута и от
 
 from __future__ import annotations
 
+import threading
 import time
+from datetime import datetime
 
 from kivy.clock import Clock, mainthread
 from kivy.graphics import Color, Rectangle
@@ -26,6 +28,7 @@ from kivy.utils import get_color_from_hex as hexc
 
 import palette
 
+import history as history_mod
 import location as location_mod
 import mushroom_forecast as engine
 import compass as compass_mod
@@ -126,6 +129,9 @@ class WalkScreen(Popup):
         self.map = TileMap(lat, lon, 15)
         self.map.walk = self.walk
         self.map.follow = True
+        # Прошлые походы приезжают на карту отдельно, из фонового потока:
+        # см. _load_history(). Касание по старому месту открывает карточку.
+        self.map.on_spot = self._show_spot
         self.map.set_here(lat, lon)
         root.add_widget(self.map)
 
@@ -182,6 +188,8 @@ class WalkScreen(Popup):
 
         row2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         row2.add_widget(small("Приём и сервис", self.show_service_log, MUTED))
+        self.b_hist = small("История: вкл", self.toggle_history)
+        row2.add_widget(self.b_hist)
         row2.add_widget(small("Закрыть поход", self.finish))
         root.add_widget(row2)
 
@@ -206,7 +214,98 @@ class WalkScreen(Popup):
         if location_mod.has_permission():
             self._start_gps_foreground()
             self.hint.text = ("Ищу спутники. «Старт» начнёт запись маршрута.")
+        self._load_history()
         self._refresh()
+
+    # --- прошлые походы -----------------------------------------------------
+
+    def _load_history(self):
+        """Читает архив походов в фоне и кладёт его на карту.
+
+        В отдельном потоке потому, что за несколько сезонов в tracks/
+        набирается сотня файлов, и чтение их на телефоне — заметная пауза.
+        Окно похода обязано открываться мгновенно: человек жмёт «В лес», уже
+        стоя у машины. Подложка доедет через секунду, ничего не задерживая.
+        """
+        def work():
+            try:
+                h = history_mod.load(skip_started=self.walk.started)
+            except Exception:                                     # noqa: BLE001
+                # Испорченный файл трека не повод не пустить человека в лес.
+                h = history_mod.History()
+            self._history_ready(h)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    @mainthread
+    def _history_ready(self, h):
+        self.map.history = h
+        self.map.redraw()
+        # Подпись показывается только до старта: во время записи там идут
+        # сообщения поважнее — приём, метки, паузы.
+        if not self.running and h:
+            self.hint.text = (h.summary()
+                              + ". Точка на карте — где брали; коснитесь её, "
+                                "чтобы посмотреть и проложить путь.")
+
+    def toggle_history(self):
+        """Слой прошлых походов можно убрать: в знакомом лесу он мешает.
+
+        Своих старых ниток за пять сезонов на любимом квадрате столько, что
+        сегодняшний трек в них теряется — а он нужнее всего.
+        """
+        self.map.show_history = not self.map.show_history
+        self.b_hist.text = f"История: {'вкл' if self.map.show_history else 'выкл'}"
+        self.map.redraw()
+
+    def _show_spot(self, spot):
+        """Карточка старого места находок и кнопка «Идти сюда»."""
+        box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+        _fill(box, CARD)
+
+        sp_obj = engine.SPECIES.get(spot.species)
+        title = sp_obj.name if sp_obj else "Метка"
+        when = (datetime.fromtimestamp(spot.last_t).strftime("%d.%m.%Y")
+                if spot.last_t else "дата неизвестна")
+        lines = [f"[b]{title}[/b] — {spot.count} шт",
+                 f"находок здесь: {spot.visits}, последняя {when}"]
+        if len(spot.kinds) > 1:
+            other = ", ".join(
+                f"{engine.SPECIES[k].name if k in engine.SPECIES else k} {n}"
+                for k, n in sorted(spot.kinds.items(), key=lambda kv: -kv[1]))
+            lines.append(f"[color=5C6353]{other}[/color]")
+        lbl = Label(text="\n".join(lines), markup=True, font_size=sp(14),
+                    color=INK, halign="left", valign="top")
+        lbl.bind(width=lambda w, x: setattr(w, "text_size", (x, None)))
+        box.add_widget(lbl)
+
+        btns = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        go = Button(text="Идти сюда", font_size=sp(15), bold=True,
+                    background_normal="", background_color=BLUE)
+        close = Button(text="Закрыть", font_size=sp(15), background_normal="",
+                       background_color=hexc(palette.SOFT), color=INK)
+        btns.add_widget(go)
+        btns.add_widget(close)
+        box.add_widget(btns)
+
+        pop = Popup(title="Здесь уже брали", content=box, size_hint=(0.9, None),
+                    height=dp(230), separator_color=BLUE, title_size=sp(15))
+        go.bind(on_release=lambda *_: (pop.dismiss(), self._go_to_spot(spot)))
+        close.bind(on_release=lambda *_: pop.dismiss())
+        pop.open()
+
+    def _go_to_spot(self, spot):
+        """Навигация к старому месту.
+
+        Без записанного маршрута стрелке не от чего считать: своё положение
+        она берёт из последней точки трека. Поэтому вместо молчаливого
+        бездействия — прямая подсказка, что нажать.
+        """
+        if not self.walk.points:
+            self.hint.text = ("Чтобы вести к месту, нужна запись: нажмите "
+                              "«Старт» — стрелка появится с первой точкой.")
+            return
+        self.navigate_to(spot, "К старой находке")
 
     # --- управление ---------------------------------------------------------
     def toggle(self):

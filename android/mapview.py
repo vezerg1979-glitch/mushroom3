@@ -92,6 +92,9 @@ class TileMap(Widget):
         self._touches: dict = {}
         self._pinch = None
         self.walk = None          # track.Walk — рисуется траектория и находки
+        self.history = None       # history.History — прошлые походы подложкой
+        self.show_history = True  # слой можно выключить кнопкой
+        self.on_spot = None       # касание по старой находке: f(spot)
         self.here = None          # текущее положение (lat, lon)
         self.heading = None       # куда повёрнут человек, градусы от севера
         self.follow = False       # держать текущее положение в центре
@@ -228,6 +231,14 @@ class TileMap(Widget):
         if not self._touches:
             self._pinch = None
             if not self._moved and self.collide_point(*touch.pos):
+                # Касание по старому месту находок открывает его карточку.
+                # Метка при этом не двигается: человек целился в точку, а не
+                # в пустое место, и увести из-под пальца ориентир обиднее,
+                # чем не поставить метку.
+                spot = self._spot_at(*touch.pos)
+                if spot is not None:
+                    self.on_spot(spot)
+                    return True
                 self.set_marker(*self._latlon(*touch.pos))
         return True
 
@@ -299,6 +310,87 @@ class TileMap(Widget):
         Color(*color)
         Rectangle(texture=lbl.texture, pos=(x, y), size=lbl.texture.size)
 
+    # --- слой прошлых походов ----------------------------------------------
+    #
+    # Подложка, а не полноценная карта: старые маршруты нужны боковым зрением
+    # («сюда я уже ходил»), а внимание должно оставаться на живом треке и на
+    # своей точке. Поэтому нитки тонкие и блёклые, а всё яркое — сегодняшнее.
+
+    #: Насколько блёклой рисуется нитка старого маршрута.
+    OLD_TRAIL_A = 0.38
+
+    #: Радиус, в котором касание считается попаданием по старой находке.
+    SPOT_TOUCH = dp(18)
+
+    def _spot_radius(self, spot):
+        """Размер точки места: чем больше там брали, тем крупнее.
+
+        Логарифм, а не пропорция: между «взял 2» и «взял 10» разница важная,
+        между «40» и «80» — уже нет, а точка размером с полэкрана закрыла бы
+        сам лес.
+        """
+        return dp(3.5) + dp(3.5) * min(1.0, math.log10(max(1, spot.count)) / 1.6)
+
+    def _spot_color(self, spot):
+        """Цвет по виду — тот же, что в легенде графика на главном экране."""
+        sp_obj = engine.SPECIES.get(spot.species)
+        if sp_obj is None:
+            return hexc("#8A8F7E")
+        return hexc(palette.SPECIES.get(sp_obj.name, "#8A8F7E"))
+
+    def _visible(self, lat, lon, margin=TILE) -> bool:
+        x, y = self._screen(lat, lon)
+        return (self.x - margin <= x <= self.right + margin
+                and self.y - margin <= y <= self.top + margin)
+
+    def _draw_history(self):
+        h = self.history
+        # Маршруты. Отсекаем по описанному прямоугольнику: в лесу карта
+        # сдвигается на каждый тик GPS, и гонять через проекцию точки
+        # соседнего района незачем.
+        Color(0.36, 0.42, 0.31, self.OLD_TRAIL_A)
+        for tr in h.trails:
+            lo_lat, lo_lon, hi_lat, hi_lon = tr.bbox()
+            x0, y0 = self._screen(lo_lat, lo_lon)
+            x1, y1 = self._screen(hi_lat, hi_lon)
+            if (max(x0, x1) < self.x - TILE or min(x0, x1) > self.right + TILE
+                    or max(y0, y1) < self.y - TILE
+                    or min(y0, y1) > self.top + TILE):
+                continue
+            pts = []
+            for lat, lon in tr.points:
+                px, py = self._screen(lat, lon)
+                pts += [px, py]
+            if len(pts) >= 4:
+                Line(points=pts, width=dp(1.1), joint="round", cap="round")
+
+        # Места находок.
+        for s in h.spots:
+            if not self._visible(s.lat, s.lon):
+                continue
+            x, y = self._screen(s.lat, s.lon)
+            r = self._spot_radius(s)
+            # Светлый ободок: без него точка теряется и на тёмном ельнике,
+            # и на светлой вырубке.
+            Color(1, 1, 1, 0.7)
+            Ellipse(pos=(x - r - dp(1.2), y - r - dp(1.2)),
+                    size=(2 * (r + dp(1.2)), 2 * (r + dp(1.2))))
+            c = self._spot_color(s)
+            Color(c[0], c[1], c[2], 0.7)
+            Ellipse(pos=(x - r, y - r), size=(2 * r, 2 * r))
+
+    def _spot_at(self, px, py):
+        """Старая находка под пальцем или None."""
+        if not (self.history and self.show_history and self.on_spot):
+            return None
+        best, best_d = None, self.SPOT_TOUCH
+        for s in self.history.spots:
+            x, y = self._screen(s.lat, s.lon)
+            d = math.hypot(x - px, y - py)
+            if d <= best_d:
+                best, best_d = s, d
+        return best
+
     def redraw(self, *_):
         self.canvas.clear()
         n = 2 ** self.zoom
@@ -332,6 +424,11 @@ class TileMap(Widget):
                             lat, lon = num2deg(tx, ty, self.zoom)
                             self._text(f"{lat:.2f}, {lon:.2f}", sx + dp(5),
                                        sy + TILE - dp(16), 8)
+            # Прошлые походы — под всем сегодняшним: подложка не должна
+            # спорить с живым треком и своей точкой.
+            if self.history is not None and self.show_history:
+                self._draw_history()
+
             # Начало маршрута: заметная точка. Раньше при одной записанной
             # координате не рисовалось ничего, и человек думал, что запись
             # не идёт, хотя она шла — просто он ещё не отошёл от машины.
@@ -435,6 +532,11 @@ class PlacePicker(Popup):
 
         self.map = TileMap(lat, lon, 11, on_pick=self._picked)
         root.add_widget(self.map)
+        # Свои прошлые находки видны и здесь: выбор места для прогноза чаще
+        # всего и есть выбор «куда съездить», а решают его те же точки, что
+        # и в лесу. Касание тут по-прежнему ставит метку — карточка находки
+        # открывается только в походе, где от неё можно идти по стрелке.
+        threading.Thread(target=self._load_history, daemon=True).start()
 
         zrow = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         for txt, step in (("–", -1), ("+", 1)):
@@ -473,6 +575,20 @@ class PlacePicker(Popup):
         super().__init__(title="Где считать прогноз", content=root,
                          size_hint=(0.96, 0.92), separator_color=ACCENT,
                          title_size=sp(15), **kw)
+
+    def _load_history(self):
+        """Слой прошлых походов. Ошибку глотаем: карта важнее подложки."""
+        try:
+            import history as history_mod
+            h = history_mod.load()
+        except Exception:                                         # noqa: BLE001
+            return
+        self._history_ready(h)
+
+    @mainthread
+    def _history_ready(self, h):
+        self.map.history = h
+        self.map.redraw()
 
     def _save_offline(self):
         """Скачать квадрат карты вокруг выбранной точки."""
