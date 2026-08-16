@@ -197,11 +197,24 @@ def test_battery_is_only_checked_while_recording():
 #  «Весь поход»
 # --------------------------------------------------------------------------- #
 
+def _mapview():
+    """Модуль карты, если Kivy есть.
+
+    Арифметика вписывания живёт в методе виджета, поэтому без Kivy её не
+    достать. На сборочной машине его нет, и падение здесь роняло бы весь
+    релиз из-за проверок, к сборке отношения не имеющих; полный прогон
+    с Kivy идёт отдельным шагом под Xvfb (см. .github/workflows/tests.yml).
+    """
+    pytest.importorskip("kivy", reason="Kivy не установлен")
+    import mapview
+    return mapview
+
+
 class _Map:
     """Кусок TileMap, достаточный для проверки арифметики вписывания."""
 
     def __init__(self, width=1000, height=1400):
-        import mapview
+        mapview = _mapview()
 
         self.width, self.height = width, height
         self.zoom = 15
@@ -214,7 +227,7 @@ class _Map:
 
 
 def _fit(points, width=1000, height=1400):
-    import mapview
+    mapview = _mapview()
 
     m = _Map(width, height)
     ok = mapview.TileMap.fit(m, points)
@@ -222,7 +235,7 @@ def _fit(points, width=1000, height=1400):
 
 
 def test_fit_zooms_out_until_everything_is_on_screen():
-    import mapview
+    mapview = _mapview()
 
     pts = [(55.900, 38.000), (55.960, 38.090)]
     ok, m = _fit(pts)
@@ -237,7 +250,7 @@ def test_fit_zooms_out_until_everything_is_on_screen():
 
 def test_fit_keeps_a_margin_around_the_track():
     """Точка вплотную к рамке наполовину срезается собственным значком."""
-    import mapview
+    mapview = _mapview()
 
     pts = [(55.900, 38.000), (55.930, 38.050)]
     ok, m = _fit(pts)
@@ -257,7 +270,7 @@ def test_fit_centres_in_projection_not_in_degrees():
     Среднее арифметическое широт увело бы вытянутый с севера на юг трек
     вниз экрана — тем сильнее, чем он длиннее.
     """
-    import mapview
+    mapview = _mapview()
 
     pts = [(50.0, 38.0), (60.0, 38.0)]
     ok, m = _fit(pts)

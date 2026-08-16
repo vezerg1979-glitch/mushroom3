@@ -36,6 +36,9 @@ import markup
 import palette
 import photos as photos_mod
 import track as track_mod
+# Подписи живут в summary.py: там нет ни одного виджета, поэтому их можно
+# проверять на машине без Kivy — например, на сборочной.
+from summary import species_line, stats_line, when_text
 from finddialog import show_photo
 from mapview import TileMap
 
@@ -47,10 +50,6 @@ ACCENT = hexc(palette.ACCENT)
 RED = hexc(palette.RED)
 TOUCH = dp(48)
 THUMB = dp(72)
-
-RU_MONTH = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
-            "августа", "сентября", "октября", "ноября", "декабря")
-
 
 def _fill(widget, color):
     with widget.canvas.before:
@@ -67,64 +66,6 @@ def _wrapping(label):
     label.halign = "left"
     label.valign = "top"
     return label
-
-
-# --------------------------------------------------------------------------- #
-#  Человеческие подписи
-# --------------------------------------------------------------------------- #
-
-def when_text(walk) -> str:
-    """«16 августа, 9:40» — год добавляется только если он не нынешний."""
-    d = datetime.fromtimestamp(walk.started)
-    text = f"{d.day} {RU_MONTH[d.month - 1]}"
-    if d.year != datetime.now().year:
-        text += f" {d.year}"
-    return f"{text}, {d:%H:%M}"
-
-
-def duration_text(seconds: float) -> str:
-    """«2 ч 15 мин», «40 мин». Секунды в лесу никого не интересуют."""
-    minutes = int(max(0.0, seconds) // 60)
-    if minutes < 60:
-        return f"{minutes} мин"
-    return f"{minutes // 60} ч {minutes % 60:02d} мин"
-
-
-def distance_text(metres: float) -> str:
-    if metres < 1000:
-        return f"{int(round(metres / 10.0)) * 10} м"
-    return f"{metres / 1000.0:.1f} км".replace(".", ",")
-
-
-def species_line(walk) -> str:
-    """«Белый гриб 4, лисичка 12» — по убыванию количества.
-
-    Именно это человек ищет в списке глазами: не километры и не время, а
-    что взяли. Поэтому строка идёт крупно и первой после места.
-    """
-    counts = {}
-    for f in walk.finds:
-        if not f.species:
-            continue
-        counts[f.species] = counts.get(f.species, 0) + max(1, f.count)
-    if not counts:
-        return "без находок" if walk.finds else ""
-    order = sorted(counts.items(), key=lambda kv: -kv[1])
-    parts = []
-    for key, n in order[:4]:
-        name = engine.SPECIES[key].name if key in engine.SPECIES else key
-        parts.append(f"{name.lower()} {n}")
-    if len(order) > 4:
-        parts.append(f"и ещё {len(order) - 4}")
-    return ", ".join(parts)
-
-
-def stats_line(walk) -> str:
-    bits = [distance_text(walk.distance), duration_text(walk.duration)]
-    n = len(walk.photo_names())
-    if n:
-        bits.append(f"снимков {n}")
-    return " · ".join(bits)
 
 
 # --------------------------------------------------------------------------- #

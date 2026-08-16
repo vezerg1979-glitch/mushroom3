@@ -20,7 +20,9 @@ sys.path.insert(0, ROOT)
 import photos  # noqa: E402
 import places  # noqa: E402
 import track  # noqa: E402
-import walkjournal as wj  # noqa: E402
+# Импортируется summary, а не walkjournal: второй тянет за собой Kivy,
+# которого на сборочной машине нет, и тогда падает не тест, а весь релиз.
+import summary as wj  # noqa: E402
 
 
 @pytest.fixture

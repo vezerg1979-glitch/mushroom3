@@ -181,3 +181,44 @@ def test_keystore_never_committed():
             if name.endswith((".keystore", ".jks", ".b64")):
                 bad.append(os.path.join(base, name))
     assert not bad, f"в репозитории лежат ключи: {bad}"
+
+
+def test_release_tests_run_without_kivy():
+    """Прогон перед релизом не должен требовать Kivy.
+
+    Релиз собирается в образе buildozer, где Kivy для системного Python не
+    установлен. Модуль тестов, импортирующий его на верхнем уровне, роняет
+    не себя, а сбор всех тестов целиком — и подписанный APK не собирается
+    вовсе. Один такой импорт уже стоил сорванной сборки.
+    """
+    import re
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    bad = []
+    for name in sorted(os.listdir(tests_dir)):
+        if not name.startswith("test_") or not name.endswith(".py"):
+            continue
+        with open(os.path.join(tests_dir, name), encoding="utf-8") as f:
+            for num, line in enumerate(f, 1):
+                if re.match(r"^\s*(import|from)\s+kivy\b", line):
+                    bad.append(f"{name}:{num}")
+    assert not bad, f"Kivy импортируется на верхнем уровне: {bad}"
+
+
+def test_ui_modules_are_not_imported_at_test_top_level():
+    """То же про свои модули, которые тянут Kivy за собой."""
+    import re
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    # icons сюда не входит: там чистая геометрия без единого импорта Kivy,
+    # ради того и написана.
+    heavy = ("walkjournal", "walkscreen", "mapview", "finddialog",
+             "navwidget", "offlinemap", "donate_ui")
+    bad = []
+    for name in sorted(os.listdir(tests_dir)):
+        if not name.startswith("test_") or not name.endswith(".py"):
+            continue
+        with open(os.path.join(tests_dir, name), encoding="utf-8") as f:
+            for num, line in enumerate(f, 1):
+                m = re.match(r"^(import|from)\s+(\w+)", line)
+                if m and m.group(2) in heavy:
+                    bad.append(f"{name}:{num}: {line.strip()}")
+    assert not bad, f"модуль с виджетами импортируется на верхнем уровне: {bad}"

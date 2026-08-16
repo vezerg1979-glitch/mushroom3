@@ -46,6 +46,9 @@ repository secret**, и создать четыре штуки:
 
 ## 3. Сборка релиза
 
+Если собираете у себя, а не в облаке, — пошагово в `docs/release-local.md`.
+Ниже про сборку в GitHub Actions.
+
 Вкладка **Actions → build-release → Run workflow**. Либо по тегу:
 
 ```bash
