@@ -8,6 +8,7 @@
 | `mushroom_forecast.py` | расчётное ядро: водный баланс, температура почвы, индекс по видам |
 | `atlas.py` | эталонные изображения грибов и признаки видов |
 | `assets/species/` | необязательные свои фотографии видов (`<slug>.jpg`), заменяют рисунок |
+| `icon.png`, `icon-192.png`, `presplash.png` | значок и заставка; собираются из `tools/icon-source.jpg` скриптом `tools/make_icons.py` |
 | `buildozer.spec` | конфигурация сборки |
 | `build-apk.yml` | сборка в GitHub Actions (положить в `.github/workflows/`) |
 

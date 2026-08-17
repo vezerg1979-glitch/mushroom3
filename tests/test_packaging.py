@@ -114,6 +114,79 @@ def test_icon_declared_in_spec(spec):
     assert value(spec, "presplash.filename")
 
 
+def test_small_icon_kept_in_step_with_the_big_one():
+    """Значок 192 нужен карточке магазина и правится вместе с основным.
+
+    Разъезжались уже: основной значок переделали, мелкий остался прежним, и
+    в магазине висела картинка от старой версии.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("PIL не установлен")
+    small = os.path.join(ROOT, "android", "icon-192.png")
+    assert os.path.exists(small)
+    with Image.open(small) as im:
+        assert im.size == (192, 192)
+        thumb_small = im.convert("RGB").resize((16, 16))
+    with Image.open(os.path.join(ROOT, "android", "icon.png")) as big:
+        thumb_big = big.convert("RGB").resize((16, 16))
+    diff = sum(abs(a - b) for a, b in zip(thumb_small.tobytes(),
+                                          thumb_big.tobytes()))
+    assert diff / (16 * 16 * 3) < 12, "мелкий значок не от этой картинки"
+
+
+def test_icon_is_not_a_blank_fill():
+    """Сторож против пустого файла: однажды в сборку уехал залитый квадрат."""
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("PIL не установлен")
+    with Image.open(os.path.join(ROOT, "android", "icon.png")) as im:
+        colors = im.convert("RGB").resize((64, 64)).getcolors(maxcolors=1 << 20)
+    assert len(colors) > 200
+
+
+def test_icon_carries_no_caption():
+    """В значке не должно быть надписи.
+
+    На рабочем столе значок занимает 48 dp: подпись там не читается даже как
+    подпись — получается светлая полоса, отъедающая площадь у единственной
+    картинки, которую вообще можно узнать. Признак полосы — строка, где
+    больше десятой части пикселей почти белые.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("PIL не установлен")
+    with Image.open(os.path.join(ROOT, "android", "icon.png")) as im:
+        px = im.convert("L").load()
+        w, h = im.size
+    worst = max(sum(1 for x in range(w) if px[x, y] > 205) for y in range(h))
+    assert worst < w * 0.10, "похоже, в значок попала надпись"
+
+
+def test_presplash_is_square_and_its_field_colour_declared(spec):
+    """Иначе полосы вокруг заставки на вытянутом экране будут белыми.
+
+    Цвет поля сверяется с углом самой картинки: заставку меняют целиком, а
+    строку в spec забывают, и тёмная заставка на белом фоне выглядит как
+    ошибка загрузки.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("PIL не установлен")
+    declared = value(spec, "android.presplash_color")
+    assert declared, "нет android.presplash_color"
+    want = tuple(int(declared.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    with Image.open(os.path.join(ROOT, "android", "presplash.png")) as im:
+        assert im.width == im.height
+        corner = im.convert("RGB").getpixel((2, 2))
+    assert max(abs(a - b) for a, b in zip(corner, want)) <= 12, (
+        f"угол заставки {corner}, а в spec {want}")
+
+
 def test_app_title_matches_the_spec(spec):
     """Название на экране телефона и в магазине должно быть одним и тем же.
 
