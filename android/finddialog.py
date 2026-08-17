@@ -30,6 +30,8 @@ from kivy.utils import get_color_from_hex as hexc
 from kivy.clock import mainthread
 from kivy.graphics import Color, Rectangle
 
+import atlas
+import mushroom_forecast as engine
 import palette
 import photos as photos_mod
 
@@ -91,6 +93,15 @@ class FindDialog(Popup):
         self.status.bind(
             width=lambda w, x: setattr(w, "text_size", (x, None)),
             texture_size=lambda w, t: setattr(w, "height", max(dp(18), t[1])))
+
+        # --- эталон ---
+        # Сверять снимок с эталоном имеет смысл ровно здесь: гриб ещё в
+        # руках, а не в корзине вперемешку с остальными, и ошибку видом
+        # можно исправить, пока стоишь на месте. Строка узкая: главное в
+        # карточке — свои снимки, эталон только подсказка.
+        ref = self._reference_row(find.species)
+        if ref is not None:
+            box.add_widget(ref)
 
         # --- снимки ---
         self.strip = BoxLayout(size_hint=(None, None), height=THUMB,
@@ -160,6 +171,27 @@ class FindDialog(Popup):
                          separator_color=RED, title_size=sp(15),
                          auto_dismiss=False, **kw)
         self._redraw_strip()
+
+    # --- эталон -------------------------------------------------------------
+    @staticmethod
+    def _reference_row(key):
+        """Полоска «эталон вида» или None, если метка поставлена без вида."""
+        species = engine.SPECIES.get(key)
+        if species is None:
+            return None
+        row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        row.add_widget(atlas.SpeciesPicture(key=key, size_hint_x=None,
+                                            width=dp(46)))
+        lab = Label(text=f"Эталон: {species.name}", font_size=sp(12),
+                    color=MUTED, halign="left", valign="middle")
+        lab.bind(width=lambda w, x: setattr(w, "text_size", (x, None)))
+        row.add_widget(lab)
+        b = Button(text="Сверить", size_hint_x=None, width=dp(88),
+                   font_size=sp(12), background_normal="",
+                   background_color=SOFT, color=INK)
+        b.bind(on_release=lambda *_: atlas.card(key, species))
+        row.add_widget(b)
+        return row
 
     # --- снимки -------------------------------------------------------------
     def _redraw_strip(self):

@@ -134,6 +134,73 @@ def test_unknown_primitive_is_loud():
 
 
 # --------------------------------------------------------------------------- #
+#  Эталонные изображения
+# --------------------------------------------------------------------------- #
+
+def _species_keys():
+    import atlas
+
+    return sorted(atlas.PICTURES)
+
+
+@pytest.mark.parametrize("key", _species_keys())
+def test_every_reference_picture_actually_draws(key):
+    """Ровно то, что не поймала арифметика: заливка веером идёт через Mesh,
+    и неверный набор аргументов падает при отрисовке, а не в расчёте."""
+    import atlas
+
+    pic = atlas.SpeciesPicture(key=key, size=(120, 120), pos=(0, 0))
+    pic.redraw()
+    assert len(pic.canvas.children) > 4         # плашка плюс сам гриб
+
+
+@pytest.mark.parametrize("key", _species_keys())
+def test_every_species_card_opens(key):
+    """Карточка вида: крупный рисунок, признаки, двойники."""
+    import atlas
+    import mushroom_forecast as engine
+
+    pop = atlas.card(key, engine.SPECIES[key])
+    pop.dismiss()
+
+
+def test_species_picker_opens_and_marks_a_find(walk_screen):
+    """Окно «Что нашли?» строится и ставит метку нажатием на строку.
+
+    Правило прежнее: всё, что человек может нажать, должно быть нажато хотя
+    бы раз до сборки APK. Здесь этого правила не хватало дважды — сначала
+    для значка отмены, теперь для строк с картинками.
+    """
+    from walkscreen import SpeciesRow
+
+    w = walk_screen
+    w.toggle()
+    w.feed(56.02, 38.28, acc=8.0, t=w.walk.started + 1)
+    w.mark_find()
+
+    rows = [x for x in _walk(_window()) if isinstance(x, SpeciesRow)]
+    assert len(rows) == len(_species_keys())
+
+    rows[0].dispatch("on_release")
+    assert len(w.walk.finds) == 1
+    assert w.walk.finds[0].species == rows[0].key
+    w.toggle()
+
+
+def _window():
+    from kivy.core.window import Window
+
+    return Window
+
+
+def _walk(root):
+    yield root
+    for child in getattr(root, "children", []):
+        for node in _walk(child):
+            yield node
+
+
+# --------------------------------------------------------------------------- #
 #  Главный экран
 # --------------------------------------------------------------------------- #
 
