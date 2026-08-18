@@ -396,16 +396,26 @@ def share(uri, subject: str = "Наблюдения грибника", text: str
     from jnius import autoclass, cast
 
     Intent = autoclass("android.content.Intent")
+    String = autoclass("java.lang.String")
     activity = autoclass("org.kivy.android.PythonActivity").mActivity
+
+    def chars(value):
+        """Python-строка -> java.lang.CharSequence.
+
+        Через java.lang.String, а не напрямую: cast превращает один Java-
+        объект в другой и питоновскую строку не принимает вовсе —
+        «Cannot convert str to jnius.JavaClass». Ошибка вылезает только на
+        телефоне, потому что на компьютере jnius нет.
+        """
+        return cast("java.lang.CharSequence", String(value))
+
     intent = Intent(Intent.ACTION_SEND)
     intent.setType("application/zip")
     intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
-    intent.putExtra(Intent.EXTRA_SUBJECT, cast("java.lang.CharSequence", subject))
+    intent.putExtra(Intent.EXTRA_SUBJECT, chars(subject))
     if text:
-        intent.putExtra(Intent.EXTRA_TEXT, cast("java.lang.CharSequence", text))
+        intent.putExtra(Intent.EXTRA_TEXT, chars(text))
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    chooser = Intent.createChooser(intent,
-                                   cast("java.lang.CharSequence",
-                                        "Куда отправить копию"))
+    chooser = Intent.createChooser(intent, chars("Куда отправить копию"))
     activity.startActivity(chooser)
     return True
