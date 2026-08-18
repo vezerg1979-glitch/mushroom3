@@ -20,10 +20,14 @@
 
 import ast
 import os
+import sys
 
 import pytest
 
-ROOT = os.path.join(os.path.dirname(__file__), "..", "android")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from apppath import APP  # noqa: E402
+
+ROOT = APP
 
 #: Имена, которых в модуле действительно нет, и это нормально.
 #: Пусто и должно оставаться пустым: каждая запись здесь — дыра в проверке,
@@ -289,3 +293,64 @@ def test_used_modules_are_imported(name):
                         bad.append(f"{name}.py:{sub.lineno}: {used} "
                                    f"используется, но не импортирован")
     assert not bad, "\n".join(sorted(set(bad)))
+
+
+# --------------------------------------------------------------------------- #
+#  Где сами тесты ищут исходники
+# --------------------------------------------------------------------------- #
+#
+# Повод. Все тесты вычисляли путь к android/ как «каталог этого файла плюс
+# ../android». Пока pytest запускали из корня проекта, это работало; в
+# релизной сборке он запускается иначе, и путь превратился в каталог за
+# пределами проекта. Сборка встала на сборе тестов, не дойдя ни до одной
+# проверки — то есть релиз ломался ровно там, где должен был проверяться.
+
+def test_no_test_computes_the_app_path_by_hand():
+    """Путь к исходникам берётся из apppath, а не собирается заново.
+
+    Собранный вручную путь зависит от того, откуда запущен pytest, и
+    разваливается молча: половина тестов начинает проверять пустоту.
+    """
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    bad = []
+    for name in sorted(os.listdir(tests_dir)):
+        if not name.endswith(".py") or name == "apppath.py":
+            continue
+        with open(os.path.join(tests_dir, name), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        # Ищется именно сборка пути, а не упоминание строки: иначе проверка
+        # спотыкается о собственный текст и о пояснение в apppath. Образец
+        # склеивается из кусков по той же причине — целиком он попал бы в
+        # этот файл и сделал бы проверку самоедской.
+        pattern = '"..", ' + '"android"'
+        alt = "'..', " + "'android'"
+        if any("os.path" in line and (pattern in line or alt in line)
+               for line in lines):
+            bad.append(name)
+    assert not bad, "путь собирается вручную: " + ", ".join(bad)
+
+
+def test_app_path_is_found_from_anywhere(tmp_path):
+    """Поиск идёт от файла вверх, а не от рабочего каталога."""
+    import apppath
+
+    nested = tmp_path / "а" / "б" / "в"
+    nested.mkdir(parents=True)
+    assert apppath.find_app(str(os.path.abspath(__file__))) == apppath.APP
+    with pytest.raises(RuntimeError):
+        apppath.find_app(str(nested / "чужой.py"))
+
+
+def test_app_path_checks_what_it_found(tmp_path):
+    """Каталог с именем android, но без исходников, — не исходники.
+
+    Такой лежит внутри .buildozer, и приняв его за проект, тесты молча
+    проверяли бы копию, отставшую на сборку.
+    """
+    import apppath
+
+    fake = tmp_path / "проект" / "android"
+    fake.mkdir(parents=True)
+    (fake / "main.py").write_text("", encoding="utf-8")
+    with pytest.raises(RuntimeError):
+        apppath.find_app(str(tmp_path / "проект" / "тест.py"))

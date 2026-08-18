@@ -12,7 +12,10 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "android"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from apppath import APP  # noqa: E402
+
+sys.path.insert(0, APP)
 
 import palette  # noqa: E402
 
@@ -103,7 +106,7 @@ def test_no_hard_coded_colours_left_in_ui():
     должен переехать в palette.py и получить имя.
     """
     import re
-    root = os.path.join(os.path.dirname(__file__), "..", "android")
+    root = APP
     found = {}
     for name in ("main.py", "walkscreen.py", "navwidget.py"):
         with open(os.path.join(root, name), encoding="utf-8") as f:

@@ -25,6 +25,7 @@ from datetime import datetime
 from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.button import Button
 from kivy.uix.image import AsyncImage
 from kivy.uix.label import Label
@@ -40,8 +41,8 @@ import photos as photos_mod
 import track as track_mod
 # Подписи живут в summary.py: там нет ни одного виджета, поэтому их можно
 # проверять на машине без Kivy — например, на сборочной.
-from summary import (index_line, personal_scale, species_line,
-                     stats_line, when_text)
+from summary import (index_line, personal_scale, season_line,
+                     species_line, stats_line, when_text)
 from finddialog import show_photo
 from mapview import TileMap
 
@@ -53,6 +54,9 @@ ACCENT = hexc(palette.ACCENT)
 RED = hexc(palette.RED)
 TOUCH = dp(48)
 GPX_MIME = "application/gpx+xml"
+#: Миниатюра в строке списка: список листают глазами, а снимок
+#: узнаётся быстрее, чем читается название места.
+ROW_THUMB = dp(56)
 THUMB = dp(72)
 
 def _fill(widget, color):
@@ -315,6 +319,19 @@ class WalkJournal(Popup):
         scale = personal_scale(walks)
         if scale:
             self.total.text += "\n" + scale
+        # Итог сезона — то, ради чего журнал открывают зимой. Всё это
+        # посчитано и по отдельным походам, но чтобы понять, каким был
+        # сентябрь, человеку пришлось бы листать список и складывать в уме.
+        # Итог сезона показывается, только если есть с чем его сравнивать.
+        # У человека первого года он слово в слово повторял бы строку выше:
+        # те же походы, те же километры, те же находки.
+        import time as _time
+
+        year = _time.localtime().tm_year
+        if any(_time.localtime(w.started).tm_year != year for w in walks):
+            season = season_line(walks)
+            if season:
+                self.total.text += "\n" + season
 
         for walk in walks:
             self.list.add_widget(self._row(walk))
@@ -329,12 +346,15 @@ class WalkJournal(Popup):
         журнал и открывают.
         """
         hint = palette.MUTED.lstrip("#")
-        rows = [f"[b]{markup.esc(walk.place or 'без названия')}[/b]  "
-                f"[size=11sp][color={hint}]{when_text(walk)}[/color][/size]"]
+        # Дата ушла из первой строки к остальным цифрам: рядом с миниатюрой
+        # места на подпись меньше, и «Ельник у Гряды 17 / августа» ломалось
+        # пополам ровно посередине даты.
+        rows = [f"[b]{markup.esc(walk.place or 'без названия')}[/b]"]
         species = species_line(walk)
         if species:
             rows.append(f"[size=12sp]{species}[/size]")
-        rows.append(f"[size=11sp][color={hint}]{stats_line(walk)}[/color][/size]")
+        rows.append(f"[size=11sp][color={hint}]{when_text(walk)} · "
+                    f"{stats_line(walk)}[/color][/size]")
 
         btn = Button(text="\n".join(rows), markup=True, font_size=sp(14),
                      color=INK, background_normal="", background_color=SOFT,
@@ -344,7 +364,53 @@ class WalkJournal(Popup):
                  texture_size=lambda w, t: setattr(w, "height",
                                                    max(dp(64), t[1] + dp(18))))
         btn.bind(on_release=lambda *_: WalkCard(walk, on_change=self.reload).open())
-        return btn
+
+        shot = self._first_photo(walk)
+        if shot is None:
+            return btn
+        # Снимок кладётся ПОВЕРХ кнопки, а не рядом с ней. Соседний виджет
+        # съел бы полсотни точек, на которых нажатие не работает, — а строка
+        # должна нажиматься целиком, как и всё остальное в приложении.
+        # Картинка касания не перехватывает: Image их не обрабатывает и
+        # пропускает вниз, к кнопке.
+        #
+        # Во FloatLayout ребёнку нужны и pos_hint, и size_hint: без них
+        # кнопка встаёт в угол окна собственного размера, а строки списка
+        # наезжают друг на друга.
+        btn.padding = (dp(14) + ROW_THUMB, dp(8))
+        btn.size_hint = (1, 1)
+        btn.pos_hint = {"x": 0, "y": 0}
+        btn.bind(width=lambda w, x: setattr(w, "text_size",
+                                            (x - dp(24) - ROW_THUMB, None)))
+
+        holder = FloatLayout(size_hint_y=None,
+                             height=max(dp(64), btn.texture_size[1] + dp(18)))
+        btn.bind(texture_size=lambda w, t: setattr(
+            holder, "height", max(dp(64), t[1] + dp(18))))
+        img = AsyncImage(source=shot, fit_mode="cover", size_hint=(None, None),
+                         size=(ROW_THUMB, ROW_THUMB))
+        holder.add_widget(btn)
+        holder.add_widget(img)
+
+        def place(*_):
+            img.pos = (holder.x + dp(8), holder.center_y - ROW_THUMB / 2)
+
+        holder.bind(pos=place, size=place)
+        place()
+        return holder
+
+    @staticmethod
+    def _first_photo(walk):
+        """Первый уцелевший снимок похода или None.
+
+        Проверка существования не лишняя: снимок могли удалить из галереи
+        телефона, а ссылка на него в походе осталась. Пустой чёрный
+        прямоугольник в списке выглядит как поломка.
+        """
+        for name in walk.photo_names():
+            if photos_mod.exists(name):
+                return photos_mod.path_for(name)
+        return None
 
 
 def show():

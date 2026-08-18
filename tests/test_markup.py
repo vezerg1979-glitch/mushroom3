@@ -11,7 +11,10 @@ Kivy разбирает в подписях теги вида [b] и [size=…].
 import os
 import sys
 
-ROOT = os.path.join(os.path.dirname(__file__), "..", "android")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from apppath import APP  # noqa: E402
+
+ROOT = APP
 sys.path.insert(0, ROOT)
 
 import markup  # noqa: E402
