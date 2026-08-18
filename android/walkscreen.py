@@ -708,8 +708,14 @@ class WalkScreen(Popup):
         self._species_dialog()
 
     def _species_dialog(self):
-        """Выбор вида. Сам список живёт в atlas: им пользуется и карточка метки."""
-        atlas.picker(self._add_find)
+        """Выбор вида. Сам список живёт в atlas: им пользуется и карточка метки.
+
+        Последний отмеченный вид поднимается наверх: грибы растут семьями, и
+        вторая метка почти всегда того же вида, что первая.
+        """
+        last = next((f.species for f in reversed(self.walk.finds) if f.species),
+                    "")
+        atlas.picker(self._add_find, recent=last)
 
     def _add_find(self, key):
         """Метка ставится сразу, карточка открывается следом.

@@ -19,6 +19,7 @@ walkjournal.py — журнал походов: что было в прошлы�
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from kivy.graphics import Color, Rectangle
@@ -34,6 +35,7 @@ from kivy.utils import get_color_from_hex as hexc
 import mushroom_forecast as engine
 import markup
 import palette
+import backup
 import photos as photos_mod
 import track as track_mod
 # Подписи живут в summary.py: там нет ни одного виджета, поэтому их можно
@@ -50,6 +52,7 @@ SOFT = hexc(palette.SOFT)
 ACCENT = hexc(palette.ACCENT)
 RED = hexc(palette.RED)
 TOUCH = dp(48)
+GPX_MIME = "application/gpx+xml"
 THUMB = dp(72)
 
 def _fill(widget, color):
@@ -173,12 +176,42 @@ class WalkCard(Popup):
 
     # --- действия -----------------------------------------------------------
     def _export(self):
+        """Трек в GPX — и сразу человеку в руки.
+
+        Раньше файл писался во внутренний каталог приложения и оттуда
+        сообщался путь вида /data/user/0/ru.grezev.../tracks/2026-08-01.gpx.
+        Достать его человек не мог ничем: это закрытая память приложения.
+        Кнопка формально работала, а по сути нет.
+
+        Теперь тот же файл кладётся в общие «Загрузки» (там его видит любой
+        проводник и компьютер по USB) и передаётся системе — оттуда трек
+        уходит другу в мессенджер или открывается в OsmAnd. Механика та же,
+        что у резервной копии, поэтому и живёт в backup.
+        """
         try:
             path = track_mod.export_gpx(self.walk)
         except (OSError, ValueError) as e:
             self.status.text = f"Не выгрузилось: {e}"
             return
-        self.status.text = f"Сохранено: {path}"
+        if not backup.on_android():
+            self.status.text = f"Сохранено: {path}"
+            return
+        try:
+            uri = backup.publish(path, mime=GPX_MIME)
+        except Exception as e:                                    # noqa: BLE001
+            self.status.text = f"Не выгрузилось: {type(e).__name__}: {e}"[:120]
+            return
+        name = os.path.basename(path)
+        if uri is None:
+            # Android 9 и старше: content-ссылки нет, отдать файл системе
+            # нельзя — но в «Загрузках» он лежит, и это уже не тупик.
+            self.status.text = f"Трек сохранён в «Загрузки»: {name}"
+            return
+        self.status.text = f"Трек в «Загрузках» ({name}). Выберите, куда отправить."
+        backup.share(uri, subject=f"Трек: {self.walk.place or 'поход'}",
+                     text="Маршрут в формате GPX — открывается в OsmAnd, "
+                          "Google Earth и других картах.",
+                     mime=GPX_MIME, title="Куда отправить трек")
 
     def _confirm_delete(self):
         """Удаление в два шага: поход не восстановить, а кнопка рядом с «Закрыть»."""

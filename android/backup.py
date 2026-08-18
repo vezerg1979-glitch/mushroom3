@@ -286,7 +286,7 @@ def _sdk_int() -> int:
         return 0
 
 
-def publish(path: str):
+def publish(path: str, mime: str = "application/zip"):
     """Кладёт файл в общие «Загрузки». Возвращает content-ссылку или None.
 
     Начиная с Android 10 это делается через MediaStore и не требует ни
@@ -305,7 +305,7 @@ def publish(path: str):
         ContentValues = autoclass("android.content.ContentValues")
         values = ContentValues()
         values.put("_display_name", os.path.basename(path))
-        values.put("mime_type", "application/zip")
+        values.put("mime_type", mime)
         values.put("relative_path", "Download")
         resolver = activity.getContentResolver()
         uri = resolver.insert(Downloads.EXTERNAL_CONTENT_URI, values)
@@ -384,7 +384,8 @@ def pick(callback):
     return True
 
 
-def share(uri, subject: str = "Наблюдения грибника", text: str = "") -> bool:
+def share(uri, subject: str = "Наблюдения грибника", text: str = "",
+          mime: str = "application/zip", title: str = "Куда отправить") -> bool:
     """Отдаёт архив системе: почта, облако, мессенджер — на выбор человека.
 
     Именно выбор, а не «отправить на почту»: приложение не знает ни ящика
@@ -410,12 +411,12 @@ def share(uri, subject: str = "Наблюдения грибника", text: str
         return cast("java.lang.CharSequence", String(value))
 
     intent = Intent(Intent.ACTION_SEND)
-    intent.setType("application/zip")
+    intent.setType(mime)
     intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
     intent.putExtra(Intent.EXTRA_SUBJECT, chars(subject))
     if text:
         intent.putExtra(Intent.EXTRA_TEXT, chars(text))
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    chooser = Intent.createChooser(intent, chars("Куда отправить копию"))
+    chooser = Intent.createChooser(intent, chars(title))
     activity.startActivity(chooser)
     return True

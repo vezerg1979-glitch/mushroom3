@@ -209,3 +209,83 @@ def test_module_calls_match_signatures(name):
             bad.append(f"{name}.py:{node.lineno}: {mod}.{f.attr} — "
                        f"нет таких параметров: {', '.join(sorted(unknown))}")
     assert not bad, "\n".join(bad)
+
+
+# --------------------------------------------------------------------------- #
+#  Забытый импорт
+# --------------------------------------------------------------------------- #
+
+def _module_names(tree):
+    """Имена, которые в модуле точно есть: импорты, объявления, присваивания."""
+    return _defined(tree)
+
+
+def _args_of(a):
+    names = set()
+    if a is None:
+        return names
+    for arg in a.posonlyargs + a.args + a.kwonlyargs:
+        names.add(arg.arg)
+    for extra in (a.vararg, a.kwarg):
+        if extra:
+            names.add(extra.arg)
+    return names
+
+
+def _locals_of(node):
+    """Имена, живущие внутри функции: параметры, присваивания, циклы, with.
+
+    Считаются и параметры вложенных функций: у слушателей координат
+    аргумент называется location — как модуль location.py, — и без этого
+    проверка ругалась на совершенно исправный код. Ложное срабатывание
+    здесь опаснее пропуска: сторож, который кричит зря, отключают.
+    """
+    names = _args_of(getattr(node, "args", None))
+    for inner in ast.walk(node):
+        if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef,
+                              ast.Lambda)):
+            names |= _args_of(inner.args)
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Store):
+            names.add(inner.id)
+        elif isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                ast.ClassDef)):
+            names.add(inner.name)
+        elif isinstance(inner, (ast.Import, ast.ImportFrom)):
+            for al in inner.names:
+                names.add(al.asname or al.name.split(".")[0])
+        elif isinstance(inner, ast.ExceptHandler) and inner.name:
+            names.add(inner.name)
+        elif isinstance(inner, ast.comprehension):
+            for t in ast.walk(inner.target):
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+    return names
+
+
+@pytest.mark.parametrize("name", MODULES)
+def test_used_modules_are_imported(name):
+    """Обращение к незаимпортированному модулю падает только при нажатии.
+
+    Ровно так и вышло с `os.path.basename` в карточке похода: модуль читался,
+    импортировался и проходил все тесты, потому что строка исполняется
+    только по кнопке «Выгрузить» на телефоне.
+    """
+    local = _local_modules()
+    tree = _tree(name)
+    top = _module_names(tree)
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        inside = _locals_of(node)
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Attribute)
+                    and isinstance(sub.value, ast.Name)
+                    and isinstance(sub.value.ctx, ast.Load)):
+                used = sub.value.id
+                if used in local | {"os", "sys", "json", "time", "math", "re"}:
+                    if used not in top and used not in inside:
+                        bad.append(f"{name}.py:{sub.lineno}: {used} "
+                                   f"используется, но не импортирован")
+    assert not bad, "\n".join(sorted(set(bad)))

@@ -153,6 +153,15 @@ class FindDialog(Popup):
         cnt.add_widget(stepper("−", -1))
         cnt.add_widget(self.count)
         cnt.add_widget(stepper("+", 1))
+        # Координаты рядом со счётчиком, а не отдельной строкой: место в
+        # карточке дорогое, а нажимают эту кнопку редко — зато метко.
+        # «Стой там, я тебе точку скину» — обычный разговор в лесу, а до
+        # сих пор передать точку было нечем.
+        b_coord = Button(text="Координаты", size_hint_x=None, width=dp(104),
+                         font_size=sp(12), background_normal="",
+                         background_color=SOFT, color=INK)
+        b_coord.bind(on_release=lambda *_: self._copy_coords())
+        cnt.add_widget(b_coord)
         box.add_widget(cnt)
 
         box.add_widget(self.status)
@@ -213,6 +222,23 @@ class FindDialog(Popup):
         b.bind(on_release=lambda *_: atlas.card(key, species,
                                                 on_change=self._ask_species))
         self.ref_slot.add_widget(b)
+
+    def _copy_coords(self):
+        """Координаты метки в буфер обмена.
+
+        Формат «55.960600, 38.045600» намеренно самый скучный: его понимают
+        и карты Яндекса, и Google, и OsmAnd, и человек на том конце может
+        просто вставить строку в поиск. Красивые градусы с минутами
+        выглядят солиднее, но их половина программ не разбирает.
+        """
+        text = f"{self.find.lat:.6f}, {self.find.lon:.6f}"
+        try:
+            from kivy.core.clipboard import Clipboard
+            Clipboard.copy(text)
+        except Exception as e:                                    # noqa: BLE001
+            self.status.text = f"Не удалось скопировать: {text}"
+            return
+        self.status.text = f"Скопировано: {text}"
 
     def _ask_species(self):
         atlas.picker(self._set_species, title="Какой это вид?")

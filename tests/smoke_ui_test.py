@@ -346,6 +346,43 @@ def _walk(root):
 
 
 # --------------------------------------------------------------------------- #
+#  Мелочи, экономящие касания
+# --------------------------------------------------------------------------- #
+
+def test_last_species_comes_first(walk_screen):
+    """Грибы растут семьями: вторая метка почти всегда того же вида."""
+    import atlas
+
+    w = walk_screen
+    w.toggle()
+    w.feed(56.02, 38.28, acc=8.0, t=w.walk.started + 1)
+    w.walk.add_find(56.02, 38.28, "лисичка")
+    w.mark_find()
+    picker = _popup_titled("Что нашли?")
+    rows = [r for r in _walk(picker.content) if isinstance(r, atlas.SpeciesRow)]
+    # Строки идут сверху вниз, а children Kivy — снизу вверх.
+    assert rows[-1].key == "лисичка"
+    picker.dismiss()
+    w.toggle()
+
+
+def test_coordinates_can_be_copied(walk_screen):
+    """«Стой там, я тебе точку скину» — обычный разговор в лесу."""
+    from kivy.core.clipboard import Clipboard
+
+    w = walk_screen
+    find = w.walk.add_find(56.0206, 38.2807, "белый")
+    w._edit_find(find)
+    dlg = _find_dialog_for(find)
+    try:
+        dlg._copy_coords()
+        assert "56.020600" in dlg.status.text
+        assert Clipboard.paste() == "56.020600, 38.280700"
+    finally:
+        dlg.dismiss()
+
+
+# --------------------------------------------------------------------------- #
 #  Где машина
 # --------------------------------------------------------------------------- #
 

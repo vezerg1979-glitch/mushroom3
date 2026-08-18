@@ -174,3 +174,47 @@ def test_a_good_notification_clears_the_trace(android):
     notify.last_error = "старая беда"
     assert notify.post("Заголовок", "Текст") is True
     assert notify.last_error == ""
+
+
+# --------------------------------------------------------------------------- #
+#  Выгрузка трека
+# --------------------------------------------------------------------------- #
+
+def test_track_export_reaches_the_share_sheet(android, tmp_path, monkeypatch):
+    """Кнопка «Выгрузить» должна отдавать файл человеку, а не в никуда.
+
+    Раньше трек писался во внутренний каталог приложения, и сообщался путь,
+    по которому файл не достать ничем: кнопка формально работала, а по сути
+    нет. Проверяется весь путь: GPX собран, положен в «Загрузки», передан
+    системе.
+    """
+    import importlib
+
+    import track
+
+    backup = android["backup"]
+    calls = {}
+    monkeypatch.setattr(backup, "publish",
+                        lambda path, mime="application/zip":
+                        calls.setdefault("publish", (path, mime))
+                        or androidfake.autoclass("android.net.Uri")("content://x"))
+    monkeypatch.setattr(backup, "share",
+                        lambda uri, **kw: calls.setdefault("share", kw) or True)
+
+    walkjournal = importlib.import_module("walkjournal")
+    monkeypatch.setattr(walkjournal, "backup", backup)
+
+    w = track.Walk(place="Ельник")
+    w.add_point(56.0, 38.0, t=1000.0)
+    w.add_point(56.001, 38.0, t=1200.0)
+    w.stop()
+
+    card = walkjournal.WalkCard.__new__(walkjournal.WalkCard)
+    card.walk = w
+    card.status = type("L", (), {"text": ""})()
+    walkjournal.WalkCard._export(card)
+
+    assert calls["publish"][0].endswith(".gpx")
+    assert calls["publish"][1] == walkjournal.GPX_MIME
+    assert calls["share"]["mime"] == walkjournal.GPX_MIME
+    assert "Загрузк" in card.status.text
