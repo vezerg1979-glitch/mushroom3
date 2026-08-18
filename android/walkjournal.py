@@ -38,7 +38,8 @@ import photos as photos_mod
 import track as track_mod
 # Подписи живут в summary.py: там нет ни одного виджета, поэтому их можно
 # проверять на машине без Kivy — например, на сборочной.
-from summary import species_line, stats_line, when_text
+from summary import (index_line, personal_scale, species_line,
+                     stats_line, when_text)
 from finddialog import show_photo
 from mapview import TileMap
 
@@ -86,6 +87,14 @@ class WalkCard(Popup):
                                     f"{stats_line(walk)}",
                                markup=True, font_size=sp(13), color=INK))
         box.add_widget(head)
+
+        # Что модель обещала на этот день. Строка стоит рядом с итогами
+        # похода, а не в отдельном разделе: обещание и результат имеют
+        # смысл только вместе, порознь это два бесполезных числа.
+        forecast = index_line(walk)
+        if forecast:
+            box.add_widget(_wrapping(Label(text=forecast, font_size=sp(11),
+                                           color=MUTED)))
 
         # Карта с маршрутом. Центр — первая точка: конец маршрута обычно
         # совпадает с началом, а вот начало всегда осмысленно.
@@ -255,6 +264,12 @@ class WalkJournal(Popup):
                            f"{km:.1f} км".replace(".", ",")
                            + f", находок {finds}, снимки занимают "
                              f"{photos_mod.size_text()}")
+        # Своя шкала: с какого индекса походы этого человека были удачными.
+        # У каждого леса она своя, и узнать её можно только так — из
+        # собственных выездов, а не из общего прогноза.
+        scale = personal_scale(walks)
+        if scale:
+            self.total.text += "\n" + scale
 
         for walk in walks:
             self.list.add_widget(self._row(walk))

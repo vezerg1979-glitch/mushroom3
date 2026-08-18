@@ -480,19 +480,29 @@ class TileMap(Widget):
 
             # траектория похода
             if self.walk is not None and len(self.walk.points) >= 2:
-                pts = []
-                for p in self.walk.points:
-                    x, y = self._screen(p.lat, p.lon)
-                    pts += [x, y]
-                Color(1, 1, 1, 0.85)
-                Line(points=pts, width=dp(3.4), joint="round", cap="round")
-                Color(*hexc(palette.BLUE))
-                Line(points=pts, width=dp(2.0), joint="round", cap="round")
+                # Отрезками, а не одной линией: между ними человек ехал.
+                # Сплошная линия дорисовала бы дорогу через весь район —
+                # ту самую, которой в маршруте нет (см. track.FAST_BREAK).
+                first = None
+                for seg in self.walk.segments():
+                    if len(seg) < 2:
+                        continue
+                    pts = []
+                    for p in seg:
+                        x, y = self._screen(p.lat, p.lon)
+                        pts += [x, y]
+                    if first is None:
+                        first = (pts[0], pts[1])
+                    Color(1, 1, 1, 0.85)
+                    Line(points=pts, width=dp(3.4), joint="round", cap="round")
+                    Color(*hexc(palette.BLUE))
+                    Line(points=pts, width=dp(2.0), joint="round", cap="round")
                 # начало маршрута кружком: к нему ведёт кнопка «К машине»
-                Color(1, 1, 1, 0.9)
-                Line(circle=(pts[0], pts[1], dp(6)), width=dp(3.0))
-                Color(*hexc(palette.BLUE))
-                Line(circle=(pts[0], pts[1], dp(6)), width=dp(1.8))
+                if first is not None:
+                    Color(1, 1, 1, 0.9)
+                    Line(circle=(first[0], first[1], dp(6)), width=dp(3.0))
+                    Color(*hexc(palette.BLUE))
+                    Line(circle=(first[0], first[1], dp(6)), width=dp(1.8))
 
             # находки
             if self.walk is not None:

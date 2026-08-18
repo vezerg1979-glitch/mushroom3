@@ -644,6 +644,7 @@ def photo_path(key: str):
 try:                                                  # pragma: no cover
     from kivy.graphics import Color, Ellipse, Line, Mesh, RoundedRectangle
     from kivy.metrics import dp, sp
+    from kivy.uix.behaviors import ButtonBehavior
     from kivy.uix.boxlayout import BoxLayout
     from kivy.uix.button import Button
     from kivy.uix.image import AsyncImage
@@ -706,12 +707,18 @@ else:
                  texture_size=lambda w, t: setattr(w, "height", t[1] + dp(4)))
         return lab
 
-    def card(key: str, species=None) -> "Popup":
+    def card(key: str, species=None, on_change=None) -> "Popup":
         """Карточка вида: крупный эталон, признаки, двойники, предостережение.
 
         Открывается там, где спешить уже не надо: гриб в руках, а кнопка
         выбора никуда не денется. Поэтому текста здесь много, а в самом
         окне выбора — только картинка и название.
+
+        on_change — что делать, если человек сверился и понял, что вид не
+        тот. Кнопка стоит именно здесь, а не в карточке метки: сомнение
+        возникает в ту секунду, когда смотришь на эталон и признаки, и
+        отправлять человека закрывать карточку и искать нужную кнопку
+        где-то ещё — верный способ оставить метку с неверным видом.
         """
         title = species.name if species is not None else key
         box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
@@ -763,11 +770,123 @@ else:
 
         pop = Popup(title=title, content=box, size_hint=(0.94, 0.9),
                     title_size=sp(15), separator_color=hexc(palette.ACCENT))
-        close = Button(text="Закрыть", size_hint_y=None, height=dp(46),
-                       font_size=sp(15), background_normal="",
+        btns = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        close = Button(text="Закрыть", font_size=sp(15), background_normal="",
                        background_color=hexc(palette.SOFT),
                        color=hexc(palette.INK))
         close.bind(on_release=lambda *_: pop.dismiss())
-        box.add_widget(close)
+        btns.add_widget(close)
+        if on_change is not None:
+            other = Button(text="Это другой вид", font_size=sp(14),
+                           background_normal="",
+                           background_color=hexc(palette.SOFT_ALT),
+                           color=hexc(palette.INK))
+
+            def switch(*_):
+                pop.dismiss()
+                on_change()
+
+            other.bind(on_release=switch)
+            btns.add_widget(other)
+        box.add_widget(btns)
+        pop.open()
+        return pop
+
+
+    class SpeciesRow(ButtonBehavior, BoxLayout):
+        """Строка выбора вида: эталон, название, латынь. Нажимается целиком.
+
+        Своей отрисовкой фона, а не готовой кнопкой: Button рисует надпись
+        внутри себя и вложить в него картинку нельзя, а класть картинку поверх
+        кнопки — значит получить два разных обработчика касания на одной
+        площадке и промахи между ними.
+        """
+
+        def __init__(self, key, species, **kw):
+            super().__init__(orientation="horizontal", spacing=dp(8),
+                             padding=(dp(6), dp(4)), **kw)
+            self.key = key
+            with self.canvas.before:
+                self._color = Color(*hexc(palette.SOFT))
+                self._rect = RoundedRectangle(pos=self.pos, size=self.size,
+                                              radius=[dp(8)])
+            self.bind(pos=self._redraw, size=self._redraw, state=self._redraw)
+
+            self.add_widget(SpeciesPicture(key=key, bg=palette.CARD,
+                                           size_hint_x=None, width=dp(54)))
+            text = BoxLayout(orientation="vertical")
+            name = Label(text=species.name, font_size=sp(15), bold=True,
+                         color=hexc(palette.INK), halign="left", valign="bottom")
+            latin = Label(text=species.latin, font_size=sp(10),
+                          color=hexc(palette.MUTED), halign="left", valign="top")
+            for lab in (name, latin):
+                lab.bind(width=lambda w, x: setattr(w, "text_size", (x, None)))
+            text.add_widget(name)
+            text.add_widget(latin)
+            self.add_widget(text)
+
+        def _redraw(self, *_):
+            self._rect.pos = self.pos
+            self._rect.size = self.size
+            # Нажатая строка темнеет: без отклика палец жмёт второй раз.
+            self._color.rgba = hexc(palette.SOFT_ALT if self.state == "down"
+                                    else palette.SOFT)
+
+    def picker(on_pick, title="Что нашли?", plain="Просто метка"):
+        """Список видов с эталонами. on_pick(key) — выбранный вид, "" — без вида.
+
+        Живёт здесь, а не в экране похода, потому что мест, где вид
+        выбирают, стало два: постановка метки и исправление уже поставленной.
+        Разошедшиеся списки — классика: в одном одиннадцать видов, в другом
+        девять, и никто этого не замечает до жалобы.
+
+        Нажатие ловит вся строка целиком, а не картинка отдельно: маленькая
+        мишень рядом с большой — верный промах в перчатке. Узкая кнопка
+        «крупно» вынесена в конец строки и отделена зазором. Ошибка в ней
+        стоит дёшево: откроется карточка вида, её закрывают одним касанием.
+        """
+        import mushroom_forecast as engine
+
+        box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
+        with box.canvas.before:
+            Color(*hexc(palette.CARD))
+            rect = RoundedRectangle(pos=box.pos, size=box.size)
+        box.bind(pos=lambda w, v: setattr(rect, "pos", v),
+                 size=lambda w, v: setattr(rect, "size", v))
+
+        sv = ScrollView()
+        grid = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
+        grid.bind(minimum_height=grid.setter("height"))
+
+        def choose(key):
+            pop.dismiss()
+            if on_pick:
+                on_pick(key)
+
+        for key, sp_obj in engine.SPECIES.items():
+            line = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(6))
+            row = SpeciesRow(key, sp_obj)
+            row.bind(on_release=lambda _r, k=key: choose(k))
+            zoom = Button(text="крупно", size_hint_x=None, width=dp(62),
+                          font_size=sp(11), background_normal="",
+                          background_color=hexc(palette.SOFT_ALT),
+                          color=hexc(palette.MUTED))
+            zoom.bind(on_release=lambda _b, k=key, s=sp_obj: card(k, s))
+            line.add_widget(row)
+            line.add_widget(zoom)
+            grid.add_widget(line)
+
+        if plain:
+            other = Button(text=plain, size_hint_y=None, height=dp(52),
+                           font_size=sp(15), background_normal="",
+                           background_color=hexc(palette.SOFT_ALT),
+                           color=hexc(palette.MUTED))
+            other.bind(on_release=lambda _b: choose(""))
+            grid.add_widget(other)
+
+        sv.add_widget(grid)
+        box.add_widget(sv)
+        pop = Popup(title=title, content=box, size_hint=(0.9, 0.85),
+                    separator_color=hexc(palette.RED), title_size=sp(15))
         pop.open()
         return pop

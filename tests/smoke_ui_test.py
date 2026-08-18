@@ -171,14 +171,14 @@ def test_species_picker_opens_and_marks_a_find(walk_screen):
     бы раз до сборки APK. Здесь этого правила не хватало дважды — сначала
     для значка отмены, теперь для строк с картинками.
     """
-    from walkscreen import SpeciesRow
+    import atlas
 
     w = walk_screen
     w.toggle()
     w.feed(56.02, 38.28, acc=8.0, t=w.walk.started + 1)
     w.mark_find()
 
-    rows = [x for x in _walk(_window()) if isinstance(x, SpeciesRow)]
+    rows = [x for x in _walk(_window()) if isinstance(x, atlas.SpeciesRow)]
     assert len(rows) == len(_species_keys())
 
     rows[0].dispatch("on_release")
@@ -187,10 +187,154 @@ def test_species_picker_opens_and_marks_a_find(walk_screen):
     w.toggle()
 
 
+def test_walk_carries_the_forecast_of_the_day():
+    """Снимок прогноза должен доезжать до похода и переживать сохранение.
+
+    Снимок задаётся здесь явно, а не берётся с главного экрана: на сборочной
+    машине сети нет, прогноз пустой, и сравнение «пусто равно пусто» проходит
+    при любом обрыве. Первая версия этого теста именно так и молчала.
+    """
+    import track as track_mod
+    from walkscreen import WalkScreen
+
+    snapshot = {"белый": 61.4, "лисичка": 22.0}
+    w = WalkScreen(56.02, 38.28, "смешанный", "Тест", index=snapshot)
+    w.open()
+    try:
+        assert w.walk.index == snapshot
+        assert w.walk.index_stamp > 0
+        w.feed(56.02, 38.28, acc=8.0, t=w.walk.started + 1)
+        assert track_mod.save(w.walk)
+        back = [x for x in track_mod.load_all()
+                if abs(x.started - w.walk.started) < 1.0][0]
+        assert back.index == snapshot
+    finally:
+        w.dismiss()
+
+
+def test_main_screen_takes_the_snapshot_from_its_own_forecast(app):
+    """Снимок собирается по ключам видов, а не по их названиям.
+
+    В расчёте индексы разложены по названиям («Белый гриб»), а находки и
+    эталоны живут по ключам («белый»). Перепутать их легко, а заметно это
+    станет только через сезон, когда сравнивать окажется нечего.
+    """
+    import mushroom_forecast as engine
+
+    class FakeRes:
+        today = 0
+
+        @staticmethod
+        def value(name, _i):
+            return 50.0 + len(name)
+
+    before = app.res
+    app.res = FakeRes()
+    try:
+        snap = app._index_today()
+    finally:
+        app.res = before
+    assert set(snap) == set(engine.SPECIES)
+    assert snap["белый"] == round(50.0 + len(engine.SPECIES["белый"].name), 1)
+
+
+def test_snapshot_is_empty_without_a_forecast(app):
+    before = app.res
+    app.res = None
+    try:
+        assert app._index_today() == {}
+    finally:
+        app.res = before
+
+
+def test_species_of_a_find_can_be_changed(walk_screen):
+    """Сверился, понял, что ошибся, — и поправил, не теряя снимков.
+
+    Проверяется весь путь целиком: карточка метки, карточка эталона,
+    кнопка «Это другой вид», список, выбор. Разорвись он в любом месте,
+    человеку останется только удалить метку вместе с фотографиями.
+    """
+    import atlas
+    from finddialog import FindDialog
+
+    w = walk_screen
+    w.toggle()
+    w.feed(56.02, 38.28, acc=8.0, t=w.walk.started + 1)
+    find = w.walk.add_find(56.02, 38.28, "белый")
+    find.note = "под елью"
+    find.photos = ["snap.jpg"]
+
+    w._edit_find(find)
+    # Окно ищется по самой метке, а не «последнее открытое»: соседние тесты
+    # оставляют свои карточки висеть, и поиск по типу цепляет чужую.
+    dlg = _find_dialog_for(find)
+
+    # Кнопки нажимаются настоящие: карточка эталона, собранная в тесте
+    # вручную, проверяла бы саму себя, а не то, что окно метки её открывает
+    # и связывает со сменой вида. Именно на этом тест однажды и промолчал.
+    check = [b for b in _walk(dlg.ref_slot) if getattr(b, "text", "") == "Сверить"]
+    assert check, "в карточке метки нет кнопки сверки с эталоном"
+    check[0].dispatch("on_release")
+
+    card = _popup_titled("Белый гриб")
+    other = [b for b in _walk(card.content)
+             if getattr(b, "text", "") == "Это другой вид"]
+    assert other, "в карточке эталона нет кнопки смены вида"
+    other[0].dispatch("on_release")
+
+    picker = _popup_titled("Какой это вид?")
+    rows = {r.key: r for r in _walk(picker.content)
+            if isinstance(r, atlas.SpeciesRow)}
+    assert "подберёзовик" in rows
+    rows["подберёзовик"].dispatch("on_release")
+
+    assert find.species == "подберёзовик"
+    assert find.note == "под елью"
+    assert find.photos == ["snap.jpg"]
+    assert len(w.walk.finds) == 1
+    dlg.dismiss()
+    w.toggle()
+
+
+def test_a_plain_mark_can_be_named_later(walk_screen):
+    """Вид часто становится понятен дома, по снимку. Назвать его должно быть где."""
+    from finddialog import FindDialog
+
+    w = walk_screen
+    find = w.walk.add_find(56.02, 38.28, "")
+    w._edit_find(find)
+    dlg = _find_dialog_for(find)
+    labels = [b for b in _walk(dlg.ref_slot) if getattr(b, "text", "") == "Указать вид"]
+    assert labels, "у метки без вида нет кнопки «Указать вид»"
+    dlg._set_species("лисичка")
+    assert find.species == "лисичка"
+    assert dlg.title == "Лисичка"
+    dlg.dismiss()
+
+
 def _window():
     from kivy.core.window import Window
 
     return Window
+
+
+def _find_dialog_for(find):
+    """Карточка именно этой метки среди открытых окон."""
+    from finddialog import FindDialog
+
+    for x in _walk(_window()):
+        if isinstance(x, FindDialog) and x.find is find:
+            return x
+    raise AssertionError("карточка метки не открылась")
+
+
+def _popup_titled(title):
+    from kivy.uix.popup import Popup
+
+    for x in _walk(_window()):
+        if isinstance(x, Popup) and x.title == title:
+            return x
+    raise AssertionError(f"окно «{title}» не открылось")
 
 
 def _walk(root):
@@ -248,13 +392,13 @@ def test_the_whole_walk_flow(walk_screen):
         w.feed(56.02 + i * 0.0004, 38.28 + i * 0.0004, acc=8.0, t=t0 + i * 20)
     assert w.walk.distance > 0
 
-    w._add_find("белый", _FakePopup())
+    w._add_find("белый")
     assert len(w.walk.finds) == 1
     assert not w.b_undo.disabled
     w.undo()
     assert not w.walk.finds
 
-    w._add_find("лисичка", _FakePopup())
+    w._add_find("лисичка")
     w.fit_walk()
     w.toggle_follow()
     w.toggle_nav()

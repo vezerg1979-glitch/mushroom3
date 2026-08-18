@@ -677,7 +677,26 @@ class MushroomApp(App):
         bio = next((b.key for b in engine.BIOTOPES.values()
                     if b.name == self.sp_bio.text), "смешанный")
         WalkScreen(self.lat, self.lon, bio, self.btn_place.text,
+                   index=self._index_today(),
                    on_close=self._walk_done).open()
+
+    def _index_today(self) -> dict:
+        """Прогноз на сегодня по видам — снимок в поход.
+
+        Берётся здесь, а не в экране похода: расчёт живёт на главном экране,
+        и в лесу его уже не повторить — там нет сети. Если прогноз ещё не
+        считался, снимок пустой, и это нормально: поход всё равно ценнее.
+        """
+        if self.res is None:
+            return {}
+        i = self.res.today
+        out = {}
+        for key, sp in engine.SPECIES.items():
+            try:
+                out[key] = round(float(self.res.value(sp.name, i)), 1)
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+        return out
 
     def _walk_done(self, walk, saved):
         if not walk.points and not walk.finds:

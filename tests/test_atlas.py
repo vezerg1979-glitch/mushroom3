@@ -274,8 +274,21 @@ def test_photo_path_ignores_unknown_species():
 
 def test_species_dialog_shows_pictures():
     """Список выбора вида не должен вернуться к голым надписям."""
-    src = _src("walkscreen.py")
-    assert "SpeciesRow" in src and "atlas.SpeciesPicture" in src
+    src = _src("atlas.py")
+    assert "class SpeciesRow" in src and "SpeciesPicture(key=key" in src
+
+
+def test_only_one_species_list_in_the_app():
+    """Список видов строится в одном месте.
+
+    Мест, где выбирают вид, стало два: постановка метки и исправление уже
+    поставленной. Второй список, собранный на месте, разъезжается с первым
+    незаметно — в одном одиннадцать видов, в другом девять.
+    """
+    for name in ("walkscreen.py", "finddialog.py"):
+        src = _src(name)
+        assert "atlas.picker" in src, name
+        assert "SPECIES.items()" not in src, f"{name}: свой список видов"
 
 
 def test_whole_row_is_the_tap_target():
@@ -283,12 +296,26 @@ def test_whole_row_is_the_tap_target():
     маленькая мишень рядом с большой — промах в перчатке."""
     src = _src("atlas.py")
     assert "class SpeciesPicture(Widget)" in src
-    assert "ButtonBehavior" not in src
+    assert "class SpeciesPicture(ButtonBehavior" not in src
+    assert "SpeciesPicture(ButtonBehavior, Widget)" not in src
 
 
 def test_find_card_offers_the_reference():
     src = _src("finddialog.py")
-    assert "_reference_row" in src and "atlas.card" in src
+    assert "_fill_reference" in src and "atlas.card" in src
+
+
+def test_species_can_be_changed_without_losing_the_find():
+    """Исправление вида не должно проходить через удаление метки.
+
+    Вместе с меткой уходили бы снимки, заметка и координаты — то есть всё,
+    ради чего её ставили; а переснять срезанный гриб уже нельзя.
+    """
+    src = _src("finddialog.py")
+    assert "_set_species" in src
+    assert "on_change=self._ask_species" in src
+    atlas_src = _src("atlas.py")
+    assert "on_change" in atlas_src and "Это другой вид" in atlas_src
 
 
 def test_assets_folder_is_packed_into_apk():

@@ -99,9 +99,11 @@ class FindDialog(Popup):
         # руках, а не в корзине вперемешку с остальными, и ошибку видом
         # можно исправить, пока стоишь на месте. Строка узкая: главное в
         # карточке — свои снимки, эталон только подсказка.
-        ref = self._reference_row(find.species)
-        if ref is not None:
-            box.add_widget(ref)
+        #
+        # Полоска пересобирается на месте, поэтому она в отдельном
+        # контейнере: вид у метки может смениться прямо отсюда.
+        self.ref_slot = BoxLayout(size_hint_y=None, height=dp(46))
+        box.add_widget(self.ref_slot)
 
         # --- снимки ---
         self.strip = BoxLayout(size_hint=(None, None), height=THUMB,
@@ -170,28 +172,67 @@ class FindDialog(Popup):
         super().__init__(title=title, content=box, size_hint=(0.94, 0.9),
                          separator_color=RED, title_size=sp(15),
                          auto_dismiss=False, **kw)
+        self._fill_reference()
         self._redraw_strip()
 
     # --- эталон -------------------------------------------------------------
-    @staticmethod
-    def _reference_row(key):
-        """Полоска «эталон вида» или None, если метка поставлена без вида."""
-        species = engine.SPECIES.get(key)
+    def _fill_reference(self):
+        """Строка вида: эталон и кнопка сверки. Без вида — приглашение указать.
+
+        Метка «просто метка» тоже получает эту строку. Часто вид становится
+        понятен позже — дома, по снимку, — а раньше назвать его было негде:
+        карточка показывала эталон только тем, у кого вид уже выбран.
+        """
+        self.ref_slot.clear_widgets()
+        species = engine.SPECIES.get(self.find.species)
         if species is None:
-            return None
-        row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
-        row.add_widget(atlas.SpeciesPicture(key=key, size_hint_x=None,
-                                            width=dp(46)))
+            lab = Label(text="Вид не указан", font_size=sp(12), color=MUTED,
+                        halign="left", valign="middle")
+            lab.bind(width=lambda w, x: setattr(w, "text_size", (x, None)))
+            b = Button(text="Указать вид", size_hint_x=None, width=dp(120),
+                       font_size=sp(12), background_normal="",
+                       background_color=SOFT, color=INK)
+            b.bind(on_release=lambda *_: self._ask_species())
+            self.ref_slot.add_widget(lab)
+            self.ref_slot.add_widget(b)
+            return
+        key = self.find.species
+        self.ref_slot.spacing = dp(6)
+        self.ref_slot.add_widget(atlas.SpeciesPicture(key=key, size_hint_x=None,
+                                                      width=dp(46)))
         lab = Label(text=f"Эталон: {species.name}", font_size=sp(12),
                     color=MUTED, halign="left", valign="middle")
         lab.bind(width=lambda w, x: setattr(w, "text_size", (x, None)))
-        row.add_widget(lab)
+        self.ref_slot.add_widget(lab)
         b = Button(text="Сверить", size_hint_x=None, width=dp(88),
                    font_size=sp(12), background_normal="",
                    background_color=SOFT, color=INK)
-        b.bind(on_release=lambda *_: atlas.card(key, species))
-        row.add_widget(b)
-        return row
+        # Смена вида живёт внутри карточки эталона, а не рядом с кнопкой
+        # «Сверить»: две кнопки в одной узкой строке — это промахи, а
+        # сомнение в виде возникает как раз при взгляде на признаки.
+        b.bind(on_release=lambda *_: atlas.card(key, species,
+                                                on_change=self._ask_species))
+        self.ref_slot.add_widget(b)
+
+    def _ask_species(self):
+        atlas.picker(self._set_species, title="Какой это вид?")
+
+    def _set_species(self, key):
+        """Меняет вид у метки, ничего больше не трогая.
+
+        Раньше исправить ошибку можно было только удалением метки, а вместе
+        с ней уходили снимки, заметка и координаты — то есть всё, ради чего
+        метку и ставили. Снимки тут особенно жаль: переснять гриб, который
+        уже в корзине или срезан, нельзя.
+        """
+        if key == self.find.species:
+            return
+        self.find.species = key
+        species = engine.SPECIES.get(key)
+        self.title = species.name if species else "Метка"
+        self._fill_reference()
+        self.status.text = (f"Вид изменён: {species.name}" if species
+                            else "Вид снят: осталась просто метка")
 
     # --- снимки -------------------------------------------------------------
     def _redraw_strip(self):

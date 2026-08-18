@@ -170,3 +170,89 @@ def test_main_screen_opens_the_journal():
         src = f.read()
     assert "show_walk_journal" in src
     assert "import walkjournal" in src
+
+
+# --------------------------------------------------------------------------- #
+#  Обещание модели против того, что вышло
+# --------------------------------------------------------------------------- #
+
+def _rated_walk(index_value, finds, km=3.0, key="белый"):
+    w = _walk(dist=km * 1000.0)
+    w.index = {key: float(index_value)} if index_value is not None else {}
+    for _ in range(finds):
+        w.add_find(55.0, 38.0, key)
+    return w
+
+
+def test_index_line_names_the_species_it_promised():
+    w = _rated_walk(61.4, 0)
+    line = wj.index_line(w)
+    assert "61" in line and "белый гриб" in line
+
+
+def test_index_line_adds_what_was_actually_found():
+    """Обещание проверяется индексом найденного вида, а не общим максимумом."""
+    w = _rated_walk(61.4, 0)
+    w.index["лисичка"] = 22.0
+    w.add_find(55.0, 38.0, "лисичка")
+    line = wj.index_line(w)
+    assert "лисичка 22" in line
+
+
+def test_index_line_does_not_repeat_the_same_species_twice():
+    w = _rated_walk(61.4, 2)
+    assert wj.index_line(w).count("белый гриб") == 1
+
+
+def test_index_line_is_empty_for_walks_without_a_forecast():
+    """Походы, записанные до появления снимка, не должны ничего показывать."""
+    assert wj.index_line(_rated_walk(None, 3)) == ""
+
+
+def test_walk_index_reads_the_best_or_a_named_species():
+    w = _rated_walk(61.4, 0)
+    w.index["лисичка"] = 22.0
+    assert wj.walk_index(w) == 61.4
+    assert wj.walk_index(w, "лисичка") == 22.0
+    assert wj.walk_index(w, "груздь") is None
+    assert wj.walk_index(_rated_walk(None, 0)) is None
+
+
+def test_personal_scale_stays_silent_on_thin_data():
+    """Три точки — совпадение, а не шкала: выдавать их за вывод нечестно."""
+    assert wj.personal_scale([]) == ""
+    few = [_rated_walk(50, 4) for _ in range(3)]
+    text = wj.personal_scale(few)
+    assert "появится" in text and str(wj.MIN_WALKS) in text
+
+
+def test_personal_scale_finds_the_boundary():
+    walks = [_rated_walk(v, n) for v, n in
+             ((70, 9), (65, 6), (60, 4), (45, 1), (38, 0), (30, 0))]
+    text = wj.personal_scale(walks)
+    assert "60" in text and "45" in text
+
+
+def test_personal_scale_admits_when_there_is_no_boundary():
+    """Перемешанные данные — повод сказать об этом, а не рисовать порог."""
+    walks = [_rated_walk(v, n) for v, n in
+             ((70, 9), (40, 6), (60, 0), (45, 1), (38, 0), (30, 5))]
+    text = wj.personal_scale(walks)
+    assert "границы не видно" in text
+
+
+def test_personal_scale_ignores_walks_without_distance():
+    """Находки на километр без километров не считаются: делить не на что."""
+    walks = [_rated_walk(v, n, km=0.05) for v, n in
+             ((70, 9), (65, 6), (60, 4), (45, 1), (38, 0), (30, 0))]
+    assert wj.personal_scale(walks) == ""
+
+
+def test_forecast_snapshot_survives_saving(data_dir):
+    w = _rated_walk(61.4, 2)
+    w.index_stamp = 1_700_000_000.0
+    track.save(w)
+    back = track.load_all()[0]
+    assert back.index == w.index
+    assert back.index_stamp == w.index_stamp
+    assert wj.index_line(back) == wj.index_line(w)

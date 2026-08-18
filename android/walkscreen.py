@@ -19,7 +19,6 @@ from datetime import datetime
 from kivy.clock import Clock, mainthread
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.metrics import dp, sp
-from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
@@ -89,51 +88,17 @@ class Counter(BoxLayout):
         self.lbl.text = text
 
 
-class SpeciesRow(ButtonBehavior, BoxLayout):
-    """Строка выбора вида: эталон, название, латынь. Нажимается целиком.
-
-    Своей отрисовкой фона, а не готовой кнопкой: Button рисует надпись
-    внутри себя и вложить в него картинку нельзя, а класть картинку поверх
-    кнопки — значит получить два разных обработчика касания на одной
-    площадке и промахи между ними.
-    """
-
-    def __init__(self, key, species, **kw):
-        super().__init__(orientation="horizontal", spacing=dp(8),
-                         padding=(dp(6), dp(4)), **kw)
-        self.key = key
-        with self.canvas.before:
-            self._color = Color(*hexc(palette.SOFT))
-            self._rect = RoundedRectangle(pos=self.pos, size=self.size,
-                                          radius=[dp(8)])
-        self.bind(pos=self._redraw, size=self._redraw, state=self._redraw)
-
-        self.add_widget(atlas.SpeciesPicture(key=key, bg=palette.CARD,
-                                             size_hint_x=None, width=dp(54)))
-        text = BoxLayout(orientation="vertical")
-        name = Label(text=species.name, font_size=sp(15), bold=True, color=INK,
-                     halign="left", valign="bottom")
-        latin = Label(text=species.latin, font_size=sp(10), color=MUTED,
-                      halign="left", valign="top")
-        for lab in (name, latin):
-            lab.bind(width=lambda w, x: setattr(w, "text_size", (x, None)))
-        text.add_widget(name)
-        text.add_widget(latin)
-        self.add_widget(text)
-
-    def _redraw(self, *_):
-        self._rect.pos = self.pos
-        self._rect.size = self.size
-        # Нажатая строка темнеет: без отклика палец жмёт второй раз.
-        self._color.rgba = hexc(palette.SOFT_ALT if self.state == "down"
-                                else palette.SOFT)
-
-
 class WalkScreen(Popup):
     """Режим похода поверх основного экрана."""
 
-    def __init__(self, lat, lon, biotope="смешанный", place="", on_close=None, **kw):
+    def __init__(self, lat, lon, biotope="смешанный", place="", on_close=None,
+                 index=None, **kw):
         self.walk = track_mod.Walk(place=place, biotope=biotope)
+        # Снимок прогноза кладётся в поход сразу, при открытии экрана: к
+        # моменту, когда человек нажмёт «Стоп», сети уже может не быть, а
+        # обещание модели должно остаться записанным именно на день выхода.
+        self.walk.index = dict(index or {})
+        self.walk.index_stamp = time.time() if index else 0.0
         self._start_at = (lat, lon)        # чем считать закат до первой точки
         self._dusk_warned = False
         self._battery_warned = 0           # порог, о котором уже сказали
@@ -664,46 +629,10 @@ class WalkScreen(Popup):
         self._species_dialog()
 
     def _species_dialog(self):
-        """Выбор вида: у каждой строки эталонная картинка.
+        """Выбор вида. Сам список живёт в atlas: им пользуется и карточка метки."""
+        atlas.picker(self._add_find)
 
-        Одиннадцать одинаковых надписей в лесу читаются плохо: экран в
-        бликах, глаза заняты землёй, а не телефоном. Картинка узнаётся
-        раньше, чем прочитано слово, поэтому она стоит слева от названия и
-        занимает половину высоты строки.
-
-        Нажатие ловит вся строка целиком, а не картинка отдельно: маленькая
-        мишень рядом с большой — верный промах в перчатке. Узкая кнопка
-        «крупно» вынесена в конец строки и отделена зазором. Ошибка в ней
-        стоит дёшево: откроется карточка вида, её закрывают одним касанием.
-        """
-        box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
-        _fill(box, CARD)
-        sv = ScrollView()
-        grid = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
-        grid.bind(minimum_height=grid.setter("height"))
-        for key, sp_obj in engine.SPECIES.items():
-            line = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(6))
-            row = SpeciesRow(key, sp_obj)
-            row.bind(on_release=lambda _r, k=key: self._add_find(k, pop))
-            zoom = Button(text="крупно", size_hint_x=None, width=dp(62),
-                          font_size=sp(11), background_normal="",
-                          background_color=hexc(palette.SOFT_ALT), color=MUTED)
-            zoom.bind(on_release=lambda _b, k=key, s=sp_obj: atlas.card(k, s))
-            line.add_widget(row)
-            line.add_widget(zoom)
-            grid.add_widget(line)
-        other = Button(text="Просто метка", size_hint_y=None, height=dp(52),
-                       font_size=sp(15), background_normal="",
-                       background_color=hexc(palette.SOFT_ALT), color=MUTED)
-        other.bind(on_release=lambda _b: self._add_find("", pop))
-        grid.add_widget(other)
-        sv.add_widget(grid)
-        box.add_widget(sv)
-        pop = Popup(title="Что нашли?", content=box, size_hint=(0.9, 0.85),
-                    separator_color=RED, title_size=sp(15))
-        pop.open()
-
-    def _add_find(self, key, pop):
+    def _add_find(self, key):
         """Метка ставится сразу, карточка открывается следом.
 
         Порядок важен: сначала запись, потом уточнения. Если человек
@@ -711,7 +640,6 @@ class WalkScreen(Popup):
         координатами уже сохранена — а координаты и есть самое ценное,
         их потом не восстановить.
         """
-        pop.dismiss()
         lat, lon = self.map.here
         find = self.walk.add_find(lat, lon, key)
         buzz.tap()                     # подтверждение, когда смотреть некогда
