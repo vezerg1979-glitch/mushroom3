@@ -35,6 +35,22 @@ MAX_ACCURACY_M = 50.0   # обычный порог: точки хуже игн�
 FALLBACK_ACCURACY_M = 150.0
 FALLBACK_AFTER = 5      # столько подряд отброшенных — и принимаем как есть
 MAX_SPEED_MS = 8.0      # быстрее человек по лесу не идёт — выброс приёмника
+
+# Сколько подряд «слишком быстрых» точек означает, что это уже не выброс.
+#
+# Одиночный скачок приёмника — обычное дело, его надо просто выбросить. Но
+# если быстрые точки идут одна за другой полминуты, приёмник не врёт:
+# человек едет. Раньше разницы между этими случаями не было, и поездка
+# отбраковывалась вся целиком, а первая же пешая точка после неё проходила
+# проверку скорости (средняя за полчаса падает ниже порога) и дотягивалась
+# до трека ПРЯМОЙ ЧЕРЕЗ ПОЛКАРТЫ. В расстояние похода при этом попадали
+# десятки километров, которые человек проехал, а оттуда — в журнал и в
+# калибровку модели, то есть одна поездка тихо портила обучающую выборку.
+#
+# Поэтому после серии быстрых точек маршрут не склеивается, а разрывается:
+# запись продолжается с текущего места, расстояние не растёт. Заодно это
+# правильно описывает обычный день, когда между двумя делянками переезжают.
+FAST_BREAK = 5
 EARTH_R = 6371008.8
 
 
@@ -54,6 +70,7 @@ class Point:
     lon: float
     t: float                       # время, unix-секунды
     acc: float = 0.0               # заявленная точность, м
+    gap: bool = False              # точка начинает новый отрезок маршрута
 
 
 @dataclass
@@ -96,6 +113,7 @@ class Walk:
     rough: int = 0                 # принятые по аварийному порогу точности
     last_acc: float = 0.0          # точность последней координаты, м
     _weak_streak: int = 0          # сколько точек подряд отбраковано
+    _fast_streak: int = 0          # сколько подряд быстрее пешехода
 
     # --- запись ------------------------------------------------------------
     def add_point(self, lat, lon, acc=0.0, t=None) -> bool:
@@ -117,15 +135,47 @@ class Walk:
         last = self.points[-1]
         d = haversine(last.lat, last.lon, lat, lon)
         dt = max(0.5, t - last.t)
-        if d / dt > MAX_SPEED_MS:                 # выброс приёмника
+        if d / dt > MAX_SPEED_MS:                 # быстрее пешехода
             self.skipped += 1
-            return False
+            self._fast_streak += 1
+            if self._fast_streak < FAST_BREAK:    # одиночный скачок приёмника
+                return False
+            # Быстрые точки идут подряд: человек едет. Продолжаем маршрут
+            # с этого места новым отрезком, расстояние не наращиваем —
+            # проеханные километры не его.
+            #
+            # Точка при этом не копится каждые полминуты, а ПЕРЕЕЗЖАЕТ:
+            # пока едем, она сдвигается следом за машиной, и к концу поездки
+            # оказывается ровно там, где человек встал и вышел. Иначе дорога
+            # усыпала бы карту одиночными точками, а «Весь поход» вписывал
+            # бы в экран заодно и трассу.
+            self._fast_streak = 0
+            if last.gap:
+                last.lat, last.lon, last.t, last.acc = lat, lon, t, acc
+            else:
+                self.points.append(Point(lat, lon, t, acc, gap=True))
+            return True
+        self._fast_streak = 0
         if d < MIN_STEP_M:                        # дрожание на месте
             last.t = t                            # но человек здесь и сейчас:
             return False                          # иначе сломается проверка скорости
         self.points.append(Point(lat, lon, t, acc))
         self.distance += d
         return True
+
+    def segments(self) -> list:
+        """Маршрут отрезками: между ними человек ехал, а не шёл.
+
+        Отдельным методом, потому что рисование и выгрузка в GPX должны
+        разрывать линию в одних и тех же местах. Пока это делалось глазами
+        по плоскому списку точек, любой из двух способов было легко забыть.
+        """
+        out = []
+        for p in self.points:
+            if not out or p.gap:
+                out.append([])
+            out[-1].append(p)
+        return out
 
     def signal_state(self) -> str:
         """Что показать человеку про качество приёма: пусто — всё хорошо."""
@@ -194,8 +244,12 @@ class Walk:
             "version": 1, "started": self.started, "finished": self.finished,
             "place": self.place, "biotope": self.biotope,
             "distance": round(self.distance, 1), "skipped": self.skipped,
+            # Признак разрыва — пятым полем: старые файлы из четырёх
+            # элементов читаются как раньше, а новые понимает старая версия
+            # приложения, просто рисуя маршрут сплошным.
             "points": [[round(p.lat, 6), round(p.lon, 6), round(p.t, 1),
-                        round(p.acc, 1)] for p in self.points],
+                        round(p.acc, 1), 1 if p.gap else 0]
+                       for p in self.points],
             # Снимки — седьмым полем: старые записи из шести элементов
             # читаются как раньше, новые понимает старая версия приложения.
             "finds": [[round(f.lat, 6), round(f.lon, 6), round(f.t, 1),
@@ -211,7 +265,8 @@ class Walk:
                 biotope=raw.get("biotope", "смешанный"),
                 distance=float(raw.get("distance", 0.0)),
                 skipped=int(raw.get("skipped", 0)))
-        w.points = [Point(p[0], p[1], p[2], p[3] if len(p) > 3 else 0.0)
+        w.points = [Point(p[0], p[1], p[2], p[3] if len(p) > 3 else 0.0,
+                          bool(p[4]) if len(p) > 4 else False)
                     for p in raw.get("points", [])]
         w.finds = [Find(f[0], f[1], f[2], f[3] if len(f) > 3 else "",
                         int(f[4]) if len(f) > 4 else 1,
@@ -329,11 +384,17 @@ def to_gpx(walk: Walk) -> str:
                        f'<text>снимок</text></link>')
         wpt.append("</wpt>")
         parts.append("".join(wpt))
-    parts.append(f'<trk><name>Поход {iso(walk.started)}</name><trkseg>')
-    for p in walk.points:
-        parts.append(f'<trkpt lat="{p.lat:.6f}" lon="{p.lon:.6f}">'
-                     f'<time>{iso(p.t)}</time></trkpt>')
-    parts.append("</trkseg></trk></gpx>")
+    parts.append(f'<trk><name>Поход {iso(walk.started)}</name>')
+    # Каждый отрезок — свой trkseg. Иначе навигатор соединит конец одного
+    # с началом следующего прямой линией через весь район: ровно то, что
+    # мы только что убрали из собственной карты.
+    for seg in (walk.segments() or [[]]):
+        parts.append("<trkseg>")
+        for p in seg:
+            parts.append(f'<trkpt lat="{p.lat:.6f}" lon="{p.lon:.6f}">'
+                         f'<time>{iso(p.t)}</time></trkpt>')
+        parts.append("</trkseg>")
+    parts.append("</trk></gpx>")
     return "\n".join(parts)
 
 

@@ -915,6 +915,106 @@ class TestTrack(ResetConstants):
         self.assertEqual(back[0].finds[0].note, "у пня")
         self.assertEqual(back[0].biotope, "сосняк")
 
+    # --- переезд между делянками -------------------------------------------
+    def _drive(self, w, lat, lon, t, minutes=10, kmh=60.0):
+        """Едем по прямой на север. Возвращает конечные широту и время."""
+        step = kmh / 3.6 * 5 / 111320.0            # точка раз в 5 секунд
+        for _ in range(minutes * 12):
+            t += 5
+            lat += step
+            w.add_point(lat, lon, acc=8.0, t=t)
+        return lat, t
+
+    def test_driving_adds_no_distance(self):
+        """Проеханные километры — не пройденные.
+
+        Раньше поездка отбраковывалась целиком, а первая пешая точка после
+        неё дотягивалась до трека прямой через полкарты вместе со всеми
+        этими километрами. Оттуда они попадали в журнал и в калибровку.
+        """
+        w, lat, lon, t = self._straight_walk(n=10)
+        walked = w.distance
+        lat, t = self._drive(w, lat, lon, t, minutes=10)
+        self.assertAlmostEqual(w.distance, walked, delta=1.0)
+
+    def test_walking_resumes_after_a_drive(self):
+        w, lat, lon, t = self._straight_walk(n=10)
+        walked = w.distance
+        lat, t = self._drive(w, lat, lon, t, minutes=10)
+        for _ in range(25):                        # 25 шагов по 20 м
+            t += 20
+            lat += 20.0 / 111320.0
+            w.add_point(lat, lon, acc=8.0, t=t)
+        self.assertAlmostEqual(w.distance - walked, 500, delta=30)
+
+    def test_a_drive_leaves_a_single_moving_point(self):
+        """Дорога не должна усыпать карту точками.
+
+        Точка на время поездки одна и переезжает следом за машиной, поэтому
+        к концу она стоит там, где человек вышел, — а «Весь поход» не
+        вписывает в экран заодно и трассу.
+        """
+        w, lat, lon, t = self._straight_walk(n=10)
+        before = len(w.points)
+        lat, t = self._drive(w, lat, lon, t, minutes=10)
+        self.assertEqual(len(w.points), before + 1)
+        self.assertTrue(w.points[-1].gap)
+        self.assertAlmostEqual(w.points[-1].lat, lat, places=4)
+
+    def test_segments_split_on_the_drive(self):
+        w, lat, lon, t = self._straight_walk(n=10)
+        lat, t = self._drive(w, lat, lon, t, minutes=10)
+        for _ in range(15):
+            t += 20
+            lat += 20.0 / 111320.0
+            w.add_point(lat, lon, acc=8.0, t=t)
+        segs = w.segments()
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(len(segs[0]), 10)
+        self.assertEqual(sum(len(s) for s in segs), len(w.points))
+
+    def test_single_outlier_is_still_thrown_away(self):
+        """Разрыв не должен стать лазейкой для одиночного скачка приёмника."""
+        w, lat, lon, t = self._straight_walk(n=20)
+        before, pts = w.distance, len(w.points)
+        self.assertFalse(w.add_point(lat + 0.05, lon, acc=8.0, t=t + 20))
+        self.assertEqual(w.distance, before)
+        self.assertEqual(len(w.points), pts)
+
+    def test_gap_survives_save_and_load(self):
+        w, lat, lon, t = self._straight_walk(n=10)
+        lat, t = self._drive(w, lat, lon, t, minutes=6)
+        for _ in range(10):
+            t += 20
+            lat += 20.0 / 111320.0
+            w.add_point(lat, lon, acc=8.0, t=t)
+        w.stop()
+        self.T.save(w)
+        back = self.T.load_all()[0]
+        self.assertEqual([len(s) for s in back.segments()],
+                         [len(s) for s in w.segments()])
+
+    def test_old_files_without_the_flag_still_load(self):
+        """Файлы, записанные до появления разрыва, читаются как сплошные."""
+        raw = {"started": 1000.0, "points": [[55.0, 38.0, 1000.0, 5.0],
+                                             [55.001, 38.0, 1020.0, 5.0]]}
+        w = self.T.Walk.from_dict(raw)
+        self.assertFalse(any(p.gap for p in w.points))
+        self.assertEqual(len(w.segments()), 1)
+
+    def test_gpx_breaks_the_track_too(self):
+        """Иначе навигатор соединит отрезки прямой сам."""
+        w, lat, lon, t = self._straight_walk(n=10)
+        lat, t = self._drive(w, lat, lon, t, minutes=6)
+        for _ in range(10):
+            t += 20
+            lat += 20.0 / 111320.0
+            w.add_point(lat, lon, acc=8.0, t=t)
+        gpx = self.T.to_gpx(w)
+        self.assertEqual(gpx.count("<trkseg>"), 2)
+        self.assertEqual(gpx.count("</trkseg>"), 2)
+        self.assertEqual(gpx.count("<trkpt"), len(w.points))
+
     def test_gpx_structure(self):
         w, lat, lon, t = self._straight_walk(n=12)
         w.add_find(lat, lon, "лисичка")

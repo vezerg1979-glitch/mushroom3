@@ -264,7 +264,13 @@ def load(max_walks: int = MAX_WALKS, skip_started: float | None = None,
         if skip_started is not None and abs(w.started - skip_started) < 1.0:
             continue
         finds.extend(w.finds)
-        if len(w.points) >= 2:
-            pts = thin(simplify([(p.lat, p.lon) for p in w.points], tol_m))
+        # Каждый пеший отрезок — свой след. Поход с переездом между
+        # делянками иначе лёг бы на слой одной линией через весь район:
+        # ровно тем призраком дороги, который убран из живого трека
+        # (см. track.FAST_BREAK).
+        for seg in w.segments():
+            if len(seg) < 2:
+                continue
+            pts = thin(simplify([(p.lat, p.lon) for p in seg], tol_m))
             trails.append(Trail(points=pts, started=w.started, place=w.place))
     return History(trails=trails, spots=merge(finds, radius_m))
