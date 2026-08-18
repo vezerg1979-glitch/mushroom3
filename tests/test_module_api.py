@@ -354,3 +354,29 @@ def test_app_path_checks_what_it_found(tmp_path):
     (fake / "main.py").write_text("", encoding="utf-8")
     with pytest.raises(RuntimeError):
         apppath.find_app(str(tmp_path / "проект" / "тест.py"))
+
+
+def test_no_stray_copies_of_tests_outside_the_tests_folder():
+    """Копия файла тестов вне tests/ — источник тихой путаницы.
+
+    Такие копии остаются от старой раскладки. Голый pytest собирал их
+    наравне с настоящими, а отстав на несколько правок, они падали ещё до
+    первой проверки — и сборка вставала на файлах, которых в tests/ уже нет.
+    Настройка testpaths убрала это из сбора, но сам файл никуда не делся:
+    человек может открыть его, поправить и не понять, почему ничего не
+    меняется. Поэтому о нём говорится вслух.
+    """
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    project = os.path.dirname(tests_dir)
+    ours = {n for n in os.listdir(tests_dir) if n.endswith(".py")}
+    strays = []
+    for base, dirs, files in os.walk(project):
+        dirs[:] = [d for d in dirs
+                   if d not in (".git", ".buildozer", "__pycache__", "bin",
+                                "tests", ".pytest_cache")]
+        for name in files:
+            if name in ours and name != "__init__.py":
+                strays.append(os.path.relpath(os.path.join(base, name),
+                                              project))
+    assert not strays, ("копии файлов тестов вне tests/ — удалите их: "
+                        + ", ".join(sorted(strays)))
