@@ -382,6 +382,9 @@ def pick(callback):
     intent.addCategory(Intent.CATEGORY_OPENABLE)
     activity.startActivityForResult(intent, REQUEST_PICK)
     return True
+
+
+def share(uri, subject: str = "Наблюдения грибника", text: str = "") -> bool:
     """Отдаёт архив системе: почта, облако, мессенджер — на выбор человека.
 
     Именно выбор, а не «отправить на почту»: приложение не знает ни ящика

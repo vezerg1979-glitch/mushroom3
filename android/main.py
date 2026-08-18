@@ -67,7 +67,9 @@ import markup
 import palette
 import places as places_mod
 import prefs
+import notify
 import track as track_mod
+import wave
 from mapview import PlacePicker
 from walkscreen import WalkScreen
 
@@ -537,13 +539,21 @@ class MushroomApp(App):
                             color=INK, halign="left", valign="top", size_hint_y=None)
         self.l_sub = Label(text="Укажите место и нажмите «Прогноз»", font_size=sp(12),
                            color=MUTED, halign="left", valign="top", size_hint_y=None)
-        for l in (self.l_main, self.l_sub):
+        # Строка про начинающийся слой. Пустая — не занимает места: сообщать
+        # «волны нет» каждый день незачем, а карточка от лишней пустой
+        # строки становится выше и отодвигает график.
+        self.l_wave = Label(text="", font_size=sp(12), bold=True,
+                            color=hexc(palette.ACCENT), halign="left",
+                            valign="top", size_hint_y=None)
+        for l in (self.l_main, self.l_sub, self.l_wave):
             l.bind(width=lambda w, x: setattr(w, "text_size", (x, None)),
                    texture_size=lambda w, t: setattr(w, "height", t[1]))
+        self.l_wave.bind(text=lambda w, v: setattr(w, "opacity", 1.0 if v else 0.0))
         self.card.bind(minimum_height=lambda w, v: setattr(
             w, "height", max(dp(72), v)))
         self.card.add_widget(self.l_main)
         self.card.add_widget(self.l_sub)
+        self.card.add_widget(self.l_wave)
         root.add_widget(self.card)
 
         # --- выбор вида ---
@@ -657,6 +667,32 @@ class MushroomApp(App):
             self.status.text = (f"{res.place.name} · обновлено {res.stamp:%H:%M} · "
                                 f"Open-Meteo (CC-BY)")
         self.refresh()
+        self._check_wave(res)
+
+    def _check_wave(self, res):
+        """Начинается ли слой — и сказать об этом, пока есть время собраться.
+
+        Проверка идёт при каждом обновлении прогноза, то есть когда человек
+        открыл приложение. Разбудить его в среду самостоятельно программа
+        не может: для этого нужен будильник системы с собственным
+        приёмником на Java, которого в сборке нет (см. README). Поэтому
+        уведомление здесь делает одно, но важное дело — переживает закрытие
+        приложения и висит в шторке, попадаясь на глаза, когда человек ещё
+        может подвинуть дела.
+        """
+        try:
+            idx = {key: res.idx[sp.name] for key, sp in engine.SPECIES.items()
+                   if sp.name in res.idx}
+            found = wave.find(res.days, idx, res.today)
+        except Exception:                                          # noqa: BLE001
+            return
+        self.l_wave.text = wave.line(found)
+        fresh = wave.fresh(found, getattr(res.place, "name", ""))
+        if not fresh:
+            return
+        title, text = wave.message(fresh)
+        if notify.post(title, f"{text} {res.place.name}."):
+            wave.remember(fresh, getattr(res.place, "name", ""))
 
     @mainthread
     def _err(self, msg):
