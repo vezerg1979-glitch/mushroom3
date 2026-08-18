@@ -164,15 +164,21 @@ def guide(lat: float, lon: float, target_lat: float, target_lon: float,
 
 
 def guide_to_start(walk) -> Fix | None:
-    """Навигация обратно к началу маршрута — к машине.
+    """Навигация обратно к машине.
 
-    Walk из track.py: берётся первая точка трека и последняя как позиция.
+    Цель берётся у самого похода (walk.home_point): это отмеченная машина,
+    а если её не отмечали — первая точка маршрута. Раньше здесь всегда
+    стояла первая точка, и стрелка вела к месту, где человек нажал «Старт»:
+    к дому, к повороту с шоссе, к чему угодно.
     """
     pts = getattr(walk, "points", None)
-    if not pts or len(pts) < 1:
+    if not pts:
         return None
-    start, now = pts[0], pts[-1]
-    return guide(now.lat, now.lon, start.lat, start.lon, pts)
+    home = walk.home_point() if hasattr(walk, "home_point") else pts[0]
+    if home is None:
+        return None
+    now = pts[-1]
+    return guide(now.lat, now.lon, home.lat, home.lon, pts)
 
 
 def nearest(lat: float, lon: float, targets) -> tuple:

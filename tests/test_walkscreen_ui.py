@@ -134,12 +134,34 @@ def test_hint_label_wraps():
 
 
 def test_bottom_buttons_split_into_two_rows():
-    """Пять кнопок в одну строку не помещаются подписями."""
+    """Семь кнопок в одну строку не помещаются подписями."""
     src = _src("walkscreen.py")
     assert "row1 = BoxLayout" in src and "row2 = BoxLayout" in src
-    # и каждая мелкая кнопка обрезает подпись внутри себя, а не поверх соседа
-    small = src[src.index("def small("):src.index("def small(") + 500]
-    assert "shorten=True" in small and "text_size" in small
+    # Подпись остаётся внутри своей кнопки, а не лезет на соседнюю: либо
+    # обрезается многоточием, либо переносится на вторую строку. Проверяется
+    # замысел, а не буква: раньше здесь стояло дословное shorten=True, и
+    # тест упал на подписях в две строки, которые как раз и появились
+    # затем, чтобы ничего не обрезалось.
+    small = src[src.index("def small("):src.index("def small(") + 800]
+    assert "text_size" in small
+    assert "shorten=" in small and "multiline" in small
+
+
+def test_button_labels_fit_their_buttons():
+    """Четыре кнопки в ряду: длинные подписи должны идти в две строки.
+
+    На экране 360 dp это 85 dp на кнопку. «Машина здесь» в одну строку туда
+    не влезает и обрезается до «Машина зд…» — а обрезанная подпись у
+    кнопки, переносящей точку возврата, означает, что её не нажмут, не
+    поняв, что она делает.
+    """
+    src = _src("walkscreen.py")
+    row2 = src[src.index("row2 = BoxLayout"):src.index("row2 = BoxLayout") + 600]
+    labels = re.findall(r'small\("([^"]+)"', row2)
+    assert len(labels) == 4
+    for text in labels:
+        for line in text.split("\\n"):
+            assert len(line) <= 8, f"{text}: строка «{line}» длинновата"
 
 
 # --------------------------------------------------------------------------- #

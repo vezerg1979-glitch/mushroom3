@@ -497,12 +497,25 @@ class TileMap(Widget):
                     Line(points=pts, width=dp(3.4), joint="round", cap="round")
                     Color(*hexc(palette.BLUE))
                     Line(points=pts, width=dp(2.0), joint="round", cap="round")
-                # начало маршрута кружком: к нему ведёт кнопка «К машине»
+                # Начало маршрута кружком. Если машина отмечена отдельно,
+                # кружок ставится у неё: путать эти две точки нельзя — к
+                # одной из них человек пойдёт в сумерках.
+                car = getattr(self.walk, "car", None)
+                if car:
+                    first = self._screen(car[0], car[1])
                 if first is not None:
                     Color(1, 1, 1, 0.9)
-                    Line(circle=(first[0], first[1], dp(6)), width=dp(3.0))
+                    Line(circle=(first[0], first[1], dp(7)), width=dp(3.0))
                     Color(*hexc(palette.BLUE))
-                    Line(circle=(first[0], first[1], dp(6)), width=dp(1.8))
+                    Line(circle=(first[0], first[1], dp(7)), width=dp(1.8))
+                    if car:
+                        # Перекрестие внутри: отметка машины должна отличаться
+                        # от начала маршрута и на глаз, и на снимке экрана.
+                        Color(*hexc(palette.BLUE))
+                        Line(points=[first[0] - dp(4), first[1],
+                                     first[0] + dp(4), first[1]], width=dp(1.6))
+                        Line(points=[first[0], first[1] - dp(4),
+                                     first[0], first[1] + dp(4)], width=dp(1.6))
 
             # находки
             if self.walk is not None:

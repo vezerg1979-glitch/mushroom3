@@ -39,6 +39,7 @@ import compass as compass_mod
 import nav
 import walk2journal
 import service_ctl
+import survival
 import sun
 import track as track_mod
 import tracklog
@@ -118,6 +119,7 @@ class WalkScreen(Popup):
         self._compass = compass_mod.Compass()
         self._compass_on = self._compass.start()
 
+        self._car_moved_said = False       # про переезд машины сказали один раз
         self._nav_target = None            # None — навигация выключена,
                                            # "start" — к началу маршрута,
                                            # объект с lat/lon — к метке
@@ -231,10 +233,15 @@ class WalkScreen(Popup):
         # места, она обрежется многоточием внутри своей кнопки, а не поверх
         # соседней.
         def small(text, action, color=INK):
+            # Подпись в две строки и обрезание многоточием несовместимы:
+            # shorten сминает всё в одну строку, и «Заметка\nи фото»
+            # превращается в «Заметка и фо…». Поэтому перенос строки
+            # отключает обрезание — подпись видна целиком.
+            multiline = "\n" in text
             b = Button(text=text, font_size=sp(12), background_normal="",
                        background_color=hexc(palette.SOFT), color=color,
-                       halign="center", valign="middle", shorten=True,
-                       shorten_from="right")
+                       halign="center", valign="middle",
+                       shorten=not multiline, shorten_from="right")
             b.bind(size=lambda w, v: setattr(w, "text_size", v))
             b.bind(on_release=lambda *_: action())
             return b
@@ -247,10 +254,16 @@ class WalkScreen(Popup):
         row1.add_widget(small("Весь поход", self.fit_walk))
         root.add_widget(row1)
 
-        row2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
-        row2.add_widget(small("Заметка и фото", self.edit_last_find))
-        row2.add_widget(small("Приём и сервис", self.show_service_log, MUTED))
-        row2.add_widget(small("Закрыть поход", self.finish))
+        # Четыре кнопки в ряд помещаются только с подписями в две строки:
+        # в одну «Машина здесь» на 85 dp обрезается до «Машина зд…», а
+        # обрезанная подпись у кнопки, которая переносит точку возврата, —
+        # ровно тот случай, когда человек её не нажмёт, не поняв, что она
+        # делает.
+        row2 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        row2.add_widget(small("Заметка\nи фото", self.edit_last_find))
+        row2.add_widget(small("Машина\nздесь", self.mark_car))
+        row2.add_widget(small("Приём\nи сервис", self.show_service_log, MUTED))
+        row2.add_widget(small("Закрыть\nпоход", self.finish))
         root.add_widget(row2)
 
         super().__init__(title="Поход", content=root, size_hint=(0.98, 0.96),
@@ -418,9 +431,19 @@ class WalkScreen(Popup):
         if self.running:
             self._keep_screen(True)
             self._start_gps()
+            self.walk.resume()
+            # Старт у машины — самый частый случай, поэтому отметка ставится
+            # сама. Не угадывать вовсе было бы хуже: человек, которому
+            # ничего не предложили, не отметит ничего и узнает об этом в
+            # сумерках, когда стрелка поведёт неизвестно куда.
+            if self.walk.car is None and self.map.here:
+                self.walk.set_car(*self.map.here)
             self.hint.text = "Идёт запись. Кнопка «Нашёл!» ставит метку на карте."
         else:
             self._keep_screen(False)
+            # Перерыв запоминается, чтобы потом не спутать его с прерванной
+            # записью: со стороны они выглядят одинаково.
+            self.walk.pause()
             self.hint.text = "Пауза. Метры не считаются."
 
     def fit_walk(self):
@@ -617,11 +640,67 @@ class WalkScreen(Popup):
         """Новая координата. Вынесено отдельно: так же кормят тесты."""
         if self.running:
             self.walk.add_point(lat, lon, acc, t)
+            self._car_follows_the_drive()
         else:
             self.walk.last_acc = acc
         self._last_fix = time.time()
         self.map.set_here(lat, lon)
         self._refresh()
+
+    def _car_follows_the_drive(self):
+        """Пока человек едет, отметка машины едет вместе с ним.
+
+        Точка разрыва (track.FAST_BREAK) — это и есть машина: она
+        сдвигается следом за ней и останавливается там, где человек вышел.
+        Поэтому отметку не надо ни ставить заново после переезда, ни
+        снимать — она сама оказывается на стоянке.
+        """
+        pts = self.walk.points
+        if not pts:
+            return
+        last = pts[-1]
+        if not last.gap:
+            # Первый пеший шаг после переезда: вот здесь человек и вышел.
+            # Сама точка разрыва обновляется раз в несколько координат и
+            # отстаёт от места остановки на сотни метров — на такое
+            # расстояние в сумерках уже не выйдешь по стрелке.
+            prev = pts[-2] if len(pts) > 1 else None
+            if (prev is None or not prev.gap or not self.walk.car
+                    or track_mod.haversine(self.walk.car[0], self.walk.car[1],
+                                           prev.lat, prev.lon) > 5.0):
+                return
+            self.walk.set_car(last.lat, last.lon, last.t)
+            self.map.redraw()
+            return
+        moved = bool(self.walk.car) and (
+            track_mod.haversine(self.walk.car[0], self.walk.car[1],
+                                last.lat, last.lon)
+            > 50.0)
+        self.walk.set_car(last.lat, last.lon, last.t)
+        if moved and not self._car_moved_said:
+            self._car_moved_said = True
+            self.hint.text = ("Похоже, вы ехали: отметка машины переехала "
+                              "туда, где вы вышли.")
+        self.map.redraw()
+
+    def mark_car(self):
+        """Кнопка «Машина здесь»: переносит точку возврата на текущее место.
+
+        Нужна для случаев, которые ни угадать, ни вывести: машину оставили
+        за шлагбаумом и дошли пешком, приехали с товарищем, вышли из
+        автобуса. Само приложение ставит отметку при старте и двигает её
+        при переезде, а это — способ сказать «нет, вот здесь».
+        """
+        if not self.map.here:
+            self.hint.text = "Координат ещё нет — подождите, пока найдётся место."
+            return
+        lat, lon = self.map.here
+        self.walk.set_car(lat, lon)
+        buzz.tap()
+        self.hint.text = "Машина отмечена здесь. Стрелка «К машине» ведёт сюда."
+        self.map.redraw()
+        if self._nav_target is not None:
+            self._nav_refresh()
 
     def mark_find(self):
         if not self.map.here:
@@ -864,17 +943,45 @@ class WalkScreen(Popup):
                  + (f" — {self._compass.error}" if not self._compass_on else "")
                  + "\n"
                  f"Каталог данных: {tracklog.places_mod.data_dir()}\n")
-        box = BoxLayout(orientation="vertical", padding=dp(8))
+
+        # Разрешение системы на работу в фоне и подсказка производителя.
+        # Стоят выше лога: человек приходит сюда, когда запись оборвалась, и
+        # ему нужен ответ, а не журнал событий.
+        exempt = survival.is_exempt()
+        if exempt is True:
+            head += "Работа в фоне: разрешена системой\n"
+        elif exempt is False:
+            head += ("Работа в фоне: ОГРАНИЧЕНА системой — с погашенным "
+                     "экраном запись может обрываться\n")
+        broken = survival.report(self.walk)
+        if broken:
+            head += broken + "\n"
+
+        box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
         _fill(box, CARD)
         sv = ScrollView()
-        lbl = Label(text=head + "\n" + tracklog.read_log(), color=INK,
+        lbl = Label(text=head + "\n" + survival.advice() + "\n\n"
+                    + tracklog.read_log(), color=INK,
                     font_size=sp(11), halign="left", valign="top",
                     size_hint_y=None, padding=(dp(8), dp(8)))
         lbl.bind(width=lambda w, x: setattr(w, "text_size", (x - dp(16), None)),
                  texture_size=lambda w, t: setattr(w, "height", t[1] + dp(16)))
         sv.add_widget(lbl)
         box.add_widget(sv)
-        Popup(title="Фоновая запись", content=box, size_hint=(0.94, 0.8),
+
+        row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        b_bat = Button(text="Батарея", font_size=sp(13), background_normal="",
+                       background_color=hexc(palette.SOFT), color=INK)
+        b_bat.bind(on_release=lambda *_: survival.open_battery_settings())
+        b_auto = Button(text="Автозапуск", font_size=sp(13),
+                        background_normal="",
+                        background_color=hexc(palette.SOFT), color=INK)
+        b_auto.bind(on_release=lambda *_: survival.open_vendor_settings())
+        row.add_widget(b_bat)
+        row.add_widget(b_auto)
+        box.add_widget(row)
+
+        Popup(title="Фоновая запись", content=box, size_hint=(0.94, 0.85),
               separator_color=BLUE, title_size=sp(14)).open()
 
     # --- завершение ---------------------------------------------------------

@@ -712,6 +712,19 @@ class MushroomApp(App):
             rows.append("Находок не отмечено.")
         if saved:
             rows += ["", f"[size=11sp][color=7b8272]{markup.esc(saved)}[/color][/size]"]
+
+        # Про оборванную запись говорится сразу после похода, а не молчком.
+        # Иначе человек видит короткий трек, решает, что приложение врёт, и
+        # больше не берёт его в лес — при том что чинится это один раз, в
+        # настройках телефона.
+        import survival
+        broken = survival.report(walk)
+        if broken:
+            rows += ["", f"[color=a8564f]{markup.esc(broken)}[/color]"]
+            if survival.looks_killed(walk):
+                rows += ["", markup.esc(survival.advice()),
+                         "", "[size=11sp][color=7b8272]Те же кнопки — в походе, "
+                             "«Приём и сервис».[/color][/size]"]
         if counts:
             try:
                 import journal

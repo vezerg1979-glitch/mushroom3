@@ -120,6 +120,21 @@ class Walk:
     # выхода сравнивать обещание с результатом нечем.
     index: dict = field(default_factory=dict)
     index_stamp: float = 0.0       # когда был посчитан этот прогноз
+    # Перерывы, которые человек сделал сам: [[начало, конец], ...].
+    #
+    # Нужны не для показа, а чтобы отличать их от прерванной записи. Без
+    # этого списка обед на пне выглядит в точности как убитый системой
+    # сервис: полчаса без единой точки. Обвинить телефон в том, чего он не
+    # делал, — верный способ отправить человека крутить настройки впустую.
+    pauses: list = field(default_factory=list)
+    # Где стоит машина: [широта, долгота, время] или None.
+    #
+    # Раньше стрелка возврата вела к первой точке маршрута, а это машина
+    # только в одном случае — если человек нажал «Старт» ровно у багажника.
+    # Нажимают же его дома, в дороге и уже на просеке, и стрелка честно
+    # вела в никуда — при том что «где машина» и есть главный вопрос, ради
+    # которого экран похода вообще открывают.
+    car: list | None = None
     skipped: int = 0               # отброшенные точки
     rough: int = 0                 # принятые по аварийному порогу точности
     last_acc: float = 0.0          # точность последней координаты, м
@@ -213,8 +228,44 @@ class Walk:
     def undo_find(self):
         return self.finds.pop() if self.finds else None
 
+    def set_car(self, lat, lon, t=None):
+        """Запоминает, где оставлена машина."""
+        self.car = [float(lat), float(lon), float(t or time.time())]
+        return self.car
+
+    def home_point(self):
+        """Куда вести стрелку возврата: машина, а без неё — начало маршрута.
+
+        Начало остаётся запасным вариантом, а не отменяется: у похода,
+        записанного до появления этой отметки, другой опоры нет.
+        """
+        if self.car:
+            return Point(self.car[0], self.car[1], self.car[2])
+        return self.points[0] if self.points else None
+
+    def pause(self, t=None):
+        """Человек нажал «Пауза». Открытый перерыв — с концом, равным началу."""
+        t = time.time() if t is None else t
+        if self.pauses and self.pauses[-1][1] <= self.pauses[-1][0]:
+            return                              # уже на паузе
+        self.pauses.append([t, t])
+
+    def resume(self, t=None):
+        t = time.time() if t is None else t
+        if self.pauses and self.pauses[-1][1] <= self.pauses[-1][0]:
+            self.pauses[-1][1] = t
+
+    def paused_between(self, t0: float, t1: float) -> bool:
+        """Попадает ли промежуток на перерыв, сделанный человеком."""
+        for a, b in self.pauses:
+            b = max(a, b) or a
+            if min(t1, b) - max(t0, a) > 0:
+                return True
+        return False
+
     def stop(self):
         self.finished = time.time()
+        self.resume()                           # незакрытая пауза кончается тут
 
     # --- показатели ---------------------------------------------------------
     @property
@@ -257,6 +308,9 @@ class Walk:
             "distance": round(self.distance, 1), "skipped": self.skipped,
             "index": {k: round(v, 1) for k, v in (self.index or {}).items()},
             "index_stamp": round(self.index_stamp, 1),
+            "pauses": [[round(a, 1), round(b, 1)] for a, b in self.pauses],
+            "car": ([round(self.car[0], 6), round(self.car[1], 6),
+                     round(self.car[2], 1)] if self.car else None),
             # Признак разрыва — пятым полем: старые файлы из четырёх
             # элементов читаются как раньше, а новые понимает старая версия
             # приложения, просто рисуя маршрут сплошным.
@@ -286,6 +340,16 @@ class Walk:
         except (TypeError, ValueError, AttributeError):
             w.index = {}
         w.index_stamp = float(raw.get("index_stamp", 0.0) or 0.0)
+        try:
+            w.pauses = [[float(a), float(b)]
+                        for a, b in (raw.get("pauses") or [])]
+        except (TypeError, ValueError):
+            w.pauses = []
+        try:
+            car = raw.get("car")
+            w.car = [float(car[0]), float(car[1]), float(car[2])] if car else None
+        except (TypeError, ValueError, IndexError):
+            w.car = None
         w.points = [Point(p[0], p[1], p[2], p[3] if len(p) > 3 else 0.0,
                           bool(p[4]) if len(p) > 4 else False)
                     for p in raw.get("points", [])]

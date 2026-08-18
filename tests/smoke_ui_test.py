@@ -23,6 +23,7 @@
 import os
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -342,6 +343,164 @@ def _walk(root):
     for child in getattr(root, "children", []):
         for node in _walk(child):
             yield node
+
+
+# --------------------------------------------------------------------------- #
+#  Где машина
+# --------------------------------------------------------------------------- #
+
+def test_start_marks_the_car(walk_screen):
+    """Старт у машины — самый частый случай, отметка ставится сама."""
+    w = walk_screen
+    w.feed(56.02, 38.28, acc=8.0, t=w.walk.started)
+    assert w.walk.car is None
+    w.toggle()
+    assert w.walk.car is not None
+    assert w.walk.car[0] == pytest.approx(56.02, abs=1e-4)
+    w.toggle()
+
+
+def test_the_car_mark_follows_a_drive(walk_screen):
+    """Уехали после старта — отметка должна оказаться там, где вышли.
+
+    Это тот же разрыв маршрута, что и в track.FAST_BREAK: точка разрыва
+    едет вместе с машиной и останавливается на стоянке.
+    """
+    w = walk_screen
+    t = w.walk.started
+    w.feed(56.02, 38.28, acc=8.0, t=t)
+    w.toggle()
+    home = tuple(w.walk.car[:2])
+    lat = 56.02
+    for i in range(120):                      # десять минут по 60 км/ч
+        t += 5
+        lat += 0.00075
+        w.feed(lat, 38.28, acc=8.0, t=t)
+    assert "переехала" in w.hint.text
+    for i in range(1, 4):                     # вышли и пошли пешком
+        t += 20
+        lat += 0.00018
+        w.feed(lat, 38.28, acc=8.0, t=t)
+    # Отметка стоит там, где человек вышел, а не там, где её последний раз
+    # успела обновить дорога: разница между этими местами — сотни метров.
+    assert w.walk.car[0] == pytest.approx(lat, abs=2e-4)
+    assert w.walk.car[0] != pytest.approx(home[0], abs=1e-3)
+    w.toggle()
+
+
+def test_the_car_can_be_moved_by_hand(walk_screen):
+    """Случаи, которые не угадать: шлагбаум, автобус, приехали с товарищем."""
+    w = walk_screen
+    w.feed(56.02, 38.28, acc=8.0, t=w.walk.started)
+    w.toggle()
+    w.feed(56.05, 38.30, acc=8.0, t=w.walk.started + 600)
+    w.mark_car()
+    assert w.walk.car[0] == pytest.approx(56.05, abs=1e-4)
+    assert "Машина отмечена" in w.hint.text
+    w.toggle()
+
+
+def test_navigation_leads_to_the_car(walk_screen):
+    w = walk_screen
+    t = w.walk.started
+    w.feed(56.02, 38.28, acc=8.0, t=t)
+    w.toggle()
+    for i in range(1, 6):                     # ушли на север
+        w.feed(56.02 + i * 0.0005, 38.28, acc=8.0, t=t + i * 30)
+    w.walk.set_car(56.00, 38.28)              # машина южнее
+    w.toggle_nav()
+    fix = w.arrow.fix
+    assert fix is not None
+    assert 150 < fix.bearing < 210, "стрелка должна показывать на юг"
+    w.toggle_nav()
+    w.toggle()
+
+
+# --------------------------------------------------------------------------- #
+#  Живучесть фоновой записи
+# --------------------------------------------------------------------------- #
+
+def test_service_popup_shows_advice_and_buttons(walk_screen):
+    """Окно «Приём и сервис» — то место, куда человек идёт, когда запись
+    оборвалась. Значит, в нём должны быть ответ и кнопки, а не только лог."""
+    from kivy.uix.button import Button
+    from kivy.uix.popup import Popup
+
+    w = walk_screen
+    w.show_service_log()
+    pop = _popup_titled("Фоновая запись")
+    try:
+        texts = [b.text for b in _walk(pop.content) if isinstance(b, Button)]
+        assert "Батарея" in texts and "Автозапуск" in texts
+        labels = " ".join(getattr(x, "text", "") for x in _walk(pop.content))
+        assert "Автозапуск" in labels or "Без ограничений" in labels
+    finally:
+        pop.dismiss()
+
+
+def test_pause_button_records_the_pause(walk_screen):
+    """Перерыв должен попадать в поход, иначе его примут за обрыв записи."""
+    w = walk_screen
+    w.toggle()                                   # старт
+    w.feed(56.02, 38.28, acc=8.0, t=w.walk.started + 1)
+    w.toggle()                                   # пауза
+    assert w.walk.pauses, "пауза не записана"
+    assert w.walk.pauses[-1][1] <= w.walk.pauses[-1][0]
+    w.toggle()                                   # продолжили
+    assert w.walk.pauses[-1][1] > w.walk.pauses[-1][0]
+    w.toggle()
+
+
+# --------------------------------------------------------------------------- #
+#  Резервная копия
+# --------------------------------------------------------------------------- #
+
+def test_backup_screen_builds_and_makes_an_archive(app, data_dir):
+    """Окно копии открывается и собирает архив по-настоящему.
+
+    На компьютере системного окна «Поделиться» нет, поэтому проверяется то,
+    что от него не зависит: размеры посчитаны, файл собран, кнопки на время
+    сборки заблокированы и разблокированы обратно.
+    """
+    import backup
+    import backupscreen
+    from kivy.clock import Clock
+
+    scr = backupscreen.show()
+    try:
+        assert "Записей" in scr.info.text
+        scr._make_records()
+        for _ in range(80):                       # сборка идёт в потоке
+            if not scr.b_records.disabled:
+                break
+            time.sleep(0.05)
+            Clock.tick()
+        assert not scr.b_records.disabled, "кнопки остались заблокированными"
+        assert "Копия собрана" in scr.status.text or "Загрузк" in scr.status.text
+        path = scr.status.text.split(" (")[0].replace("Копия собрана: ", "")
+        assert os.path.exists(path), scr.status.text
+        assert backup.inspect(path)["app"] == "navigator-gribnika"
+    finally:
+        scr.dismiss()
+
+
+def test_backup_screen_refuses_a_foreign_archive(app, data_dir):
+    """Чужой архив не должен разворачиваться поверх журнала."""
+    import zipfile
+
+    import backupscreen
+    from kivy.clock import Clock
+
+    alien = os.path.join(data_dir, "alien.zip")
+    with zipfile.ZipFile(alien, "w") as z:
+        z.writestr("море.jpg", "данные")
+    scr = backupscreen.show()
+    try:
+        scr._picked(alien, "")
+        Clock.tick()                              # ответ приходит через mainthread
+        assert "не копия" in scr.status.text or "другого приложения" in scr.status.text
+    finally:
+        scr.dismiss()
 
 
 # --------------------------------------------------------------------------- #

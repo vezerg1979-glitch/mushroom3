@@ -183,3 +183,72 @@ def _walk(points):
     w = W()
     w.points = points
     return w
+
+
+# --------------------------------------------------------------------------- #
+#  Точка «машина»
+# --------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+#  Точка «машина»
+# --------------------------------------------------------------------------- #
+#
+# Стрелка возврата ведёт к машине, а не к месту нажатия «Старт». Разница не
+# косметическая: «Старт» жмут дома, на шоссе и на просеке, и стрелка честно
+# вела туда — при том что «где машина» и есть главный вопрос, ради которого
+# экран похода открывают.
+
+def _walk_with_track():
+    import track
+
+    w = track.Walk()
+    w.add_point(55.000, 38.0, t=1000.0)
+    w.add_point(55.004, 38.0, t=1200.0)
+    return w
+
+
+def test_without_a_car_the_start_is_used():
+    w = _walk_with_track()
+    assert w.home_point().lat == pytest.approx(55.000)
+    assert nav.guide_to_start(w).distance == pytest.approx(445, abs=20)
+
+
+def test_the_car_wins_over_the_start():
+    w = _walk_with_track()
+    w.set_car(55.008, 38.0, t=900.0)
+    fix = nav.guide_to_start(w)
+    assert fix.distance == pytest.approx(445, abs=20)
+    assert fix.bearing == pytest.approx(0.0, abs=2)          # машина севернее
+
+
+def test_an_empty_walk_gives_no_direction():
+    import track
+
+    assert track.Walk().home_point() is None
+    assert nav.guide_to_start(track.Walk()) is None
+
+
+def test_the_car_survives_saving(tmp_path, monkeypatch):
+    import places
+    import track
+
+    monkeypatch.setattr(places, "_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("MUSHROOM_DATA_DIR", raising=False)
+    w = _walk_with_track()
+    w.set_car(55.008, 38.0, t=900.0)
+    w.stop()
+    track.save(w)
+    back = track.load_all()[0]
+    assert back.car[:2] == [55.008, 38.0]
+    assert back.home_point().lat == pytest.approx(55.008)
+
+
+def test_old_walks_without_a_car_still_navigate():
+    """Походы, записанные до появления отметки, опираются на начало."""
+    import track
+
+    w = track.Walk.from_dict({"started": 1000.0,
+                              "points": [[55.0, 38.0, 1000.0, 5.0],
+                                         [55.004, 38.0, 1200.0, 5.0]]})
+    assert w.car is None
+    assert nav.guide_to_start(w) is not None

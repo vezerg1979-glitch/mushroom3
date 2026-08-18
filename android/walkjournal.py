@@ -232,16 +232,28 @@ class WalkJournal(Popup):
         self.sv.add_widget(self.list)
         self.box.add_widget(self.sv)
 
-        close = Button(text="Закрыть", size_hint_y=None, height=TOUCH,
-                       font_size=sp(14), background_normal="",
+        # Копия живёт здесь, а не в настройках: о ней вспоминают, глядя на
+        # накопленное, а не листая список переключателей.
+        row = BoxLayout(size_hint_y=None, height=TOUCH, spacing=dp(6))
+        b_backup = Button(text="Резервная копия", font_size=sp(14),
+                          background_normal="", background_color=SOFT,
+                          color=INK)
+        b_backup.bind(on_release=lambda *_: self._backup())
+        close = Button(text="Закрыть", font_size=sp(14), background_normal="",
                        background_color=SOFT, color=INK)
         close.bind(on_release=lambda *_: self.dismiss())
-        self.box.add_widget(close)
+        row.add_widget(b_backup)
+        row.add_widget(close)
+        self.box.add_widget(row)
 
         super().__init__(title="Журнал походов", content=self.box,
                          size_hint=(0.96, 0.9), title_size=sp(15),
                          separator_color=ACCENT, **kw)
         self.reload()
+
+    def _backup(self):
+        import backupscreen
+        backupscreen.show()
 
     def reload(self):
         self.list.clear_widgets()
