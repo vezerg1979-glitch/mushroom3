@@ -26,8 +26,12 @@ import tempfile
 import time
 
 import pytest
-from kivy.clock import Clock
 
+# Kivy наверху файла быть не должно: без него сбор тестов падает целиком, и
+# машина без графики не может прогнать даже те тесты, которые окна не
+# требуют. Импорты Kivy идут ниже — после importorskip — или внутри самих
+# тестов. Один такой импорт я сюда уже заносил: на своей машине с Kivy всё
+# проходило, а CI встал на сборе.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from apppath import APP  # noqa: E402
 
@@ -347,6 +351,91 @@ def _walk(root):
     for child in getattr(root, "children", []):
         for node in _walk(child):
             yield node
+
+
+# --------------------------------------------------------------------------- #
+#  Слои, цвета и тесная шапка
+# --------------------------------------------------------------------------- #
+
+def test_repaint_does_not_cover_open_windows(app):
+    """Пересобранный экран — нижний слой, а не верхний.
+
+    Kivy рисует окна в порядке добавления на холст, а не по списку детей.
+    Пересобранный главный экран добавлялся последним и ложился ПОВЕРХ
+    открытого похода: карта и кнопки просвечивали сквозь прогноз.
+    """
+    from kivy.core.window import Window
+    from kivy.clock import Clock
+    from walkscreen import WalkScreen
+
+    walk = WalkScreen(56.02, 38.28, "смешанный", "Тест")
+    walk.open()
+    Clock.tick()
+    try:
+        app._repaint()
+        Clock.tick()
+        # Главный экран уходит в группу before, окна остаются в основной:
+        # before рисуется первой, то есть экран заведомо под ними. Проверять
+        # порядок внутри одного списка нельзя — они лежат в разных.
+        assert app.root.canvas in list(Window.canvas.before.children), (
+            "главный экран не в нижнем слое")
+        assert walk.canvas not in list(Window.canvas.before.children), (
+            "окно уехало под главный экран")
+    finally:
+        walk.dismiss(animation=False)
+        Clock.tick()
+
+
+def test_map_buttons_stay_visible_in_the_dark(walk_screen):
+    """«+» и «−» на карте пропадали ночью: белая плашка, светлая подпись."""
+    import palette
+    import theme
+    from kivy.uix.button import Button
+
+    было = palette.current()
+    try:
+        for тема in ("день", "ночь"):
+            theme.set_mode(тема, 56.0, 38.0)
+            экран = type(walk_screen)(56.02, 38.28, "смешанный", "Тест")
+            кнопки = [b for b in _walk(экран.content)
+                      if isinstance(b, Button) and b.text in ("+", "−")]
+            assert len(кнопки) == 2, тема
+            for b in кнопки:
+                фон = b.background_color[:3]
+                текст = b.color[:3]
+                разница = sum(abs(a - c) for a, c in zip(фон, текст))
+                assert разница > 0.9, f"{тема}: подпись сливается с плашкой"
+            экран.dismiss(animation=False)
+    finally:
+        theme.set_mode(было, 56.0, 38.0)
+
+
+def test_place_name_gets_room_on_a_narrow_phone(app):
+    """На телефоне 360 точек «Фрязино» вставало в столбик по букве.
+
+    Мелкие кнопки шапки съедали 290 точек из 340, названию оставалось
+    полсотни. Поэтому в портрете шапка разделена на два ряда.
+    """
+    from kivy.clock import Clock
+    from kivy.core.window import Window
+    from kivy.metrics import dp
+
+    было = Window.size
+    try:
+        Window.size = (360, 740)
+        app._repaint()
+        # Раскладка считается не сразу, и ждать «пока ширина станет не нулевой»
+        # нельзя: у виджета Kivy размер по умолчанию 100×100, и цикл выходил
+        # на первом же тике, намерив эту сотню вместо настоящей ширины.
+        # Поэтому тиков просто отсчитывается с запасом.
+        for _ in range(20):
+            Clock.tick()
+        assert app.btn_place.width > dp(150), (
+            f"названию места осталось {app.btn_place.width:.0f} точек")
+    finally:
+        Window.size = было
+        app._repaint()
+        Clock.tick()
 
 
 # --------------------------------------------------------------------------- #

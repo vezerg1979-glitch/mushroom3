@@ -419,3 +419,34 @@ def test_ci_runs_the_suite_with_pytest():
         "discover не умеет запускать pytest-тесты")
     assert "python -m pytest tests -q" in wf
     assert "unittest tests.test_model" in wf, "ядро на голом Python не проверяется"
+
+
+def test_no_test_imports_kivy_before_the_skip():
+    """Kivy наверху файла ломает сбор тестов на машине без него.
+
+    Падает при этом не один модуль, а весь прогон: pytest не может собрать
+    файл и прекращает работу. Машина без графики после этого не проверяет
+    даже то, что окон не требует. На своей машине с Kivy такую строку не
+    заметишь — она уже уезжала в CI.
+    """
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    плохие = []
+    for name in sorted(os.listdir(tests_dir)):
+        if not name.endswith(".py"):
+            continue
+        with open(os.path.join(tests_dir, name), encoding="utf-8") as f:
+            src = f.read()
+        tree = ast.parse(src)
+        # Граница — importorskip: до него Kivy трогать нельзя, после можно.
+        граница = src.find('importorskip("kivy"')
+        for node in tree.body:          # только верхний уровень модуля
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            имена = ([a.name for a in node.names]
+                     if isinstance(node, ast.Import) else [node.module or ""])
+            if not any(n.split(".")[0] == "kivy" for n in имена):
+                continue
+            позиция = sum(len(l) + 1 for l in src.splitlines()[:node.lineno - 1])
+            if граница < 0 or позиция < граница:
+                плохие.append(f"{name}:{node.lineno}")
+    assert not плохие, "Kivy импортируется до пропуска: " + ", ".join(плохие)
