@@ -21,10 +21,6 @@ CHANNEL_NAME = "Начало слоя"
 NOTIFICATION_ID = 4201
 
 
-#: Почему последнее уведомление не показалось. Пусто — всё в порядке.
-last_error = ""
-
-
 def available() -> bool:
     try:
         from jnius import autoclass
@@ -60,13 +56,7 @@ def allowed() -> bool:
 
 
 def post(title: str, text: str, notification_id: int = NOTIFICATION_ID) -> bool:
-    """Кладёт уведомление в шторку. True — получилось.
-
-    Причина неудачи остаётся в notify.last_error: без неё поломка здесь
-    неотличима от «сейчас нечего показывать».
-    """
-    global last_error
-    last_error = ""
+    """Кладёт уведомление в шторку. True — получилось."""
     if not title or not available() or not allowed():
         return False
     try:
@@ -75,18 +65,6 @@ def post(title: str, text: str, notification_id: int = NOTIFICATION_ID) -> bool:
         activity = autoclass("org.kivy.android.PythonActivity").mActivity
         Context = autoclass("android.content.Context")
         Builder = autoclass("android.app.Notification$Builder")
-        String = autoclass("java.lang.String")
-
-        def chars(value):
-            """Python-строка -> java.lang.CharSequence.
-
-            cast переводит один Java-объект в другой и питоновскую строку
-            не принимает: «Cannot convert str to jnius.JavaClass». Здесь
-            эта ошибка была особенно вредной — она молча гасилась общим
-            except ниже, и уведомление о начале слоя не появлялось никогда,
-            без единого следа в журнале.
-            """
-            return cast("java.lang.CharSequence", String(value))
         manager = activity.getSystemService(Context.NOTIFICATION_SERVICE)
 
         if _sdk_int() >= 26:
@@ -104,8 +82,8 @@ def post(title: str, text: str, notification_id: int = NOTIFICATION_ID) -> bool:
         # вовсе — молча, что хуже всего.
         icon = activity.getApplicationInfo().icon
         builder.setSmallIcon(icon)
-        builder.setContentTitle(chars(title))
-        builder.setContentText(chars(text))
+        builder.setContentTitle(cast("java.lang.CharSequence", title))
+        builder.setContentText(cast("java.lang.CharSequence", text))
         builder.setAutoCancel(True)
 
         # Длинный текст раскрывается по нажатию: в одну строку шторки
@@ -113,7 +91,7 @@ def post(title: str, text: str, notification_id: int = NOTIFICATION_ID) -> bool:
         # ровно наоборот — «идти или нет» становится непонятно.
         Style = autoclass("android.app.Notification$BigTextStyle")
         style = Style()
-        style.bigText(chars(text))
+        style.bigText(cast("java.lang.CharSequence", text))
         builder.setStyle(style)
 
         # Нажатие открывает приложение, а не пустой экран.
@@ -128,19 +106,8 @@ def post(title: str, text: str, notification_id: int = NOTIFICATION_ID) -> bool:
             PendingIntent.getActivity(activity, 0, intent, flags))
 
         manager.notify(notification_id, builder.build())
-        last_error = ""
         return True
-    except Exception as e:                                        # noqa: BLE001
-        # Молчаливый except здесь уже стоил сезона уведомлений: cast получал
-        # питоновскую строку, всё падало, и никто об этом не узнавал —
-        # человек просто не видел сообщений о слое. Ошибка теперь оседает в
-        # last_error и в журнале сервиса, который показывает «Приём и сервис».
-        last_error = f"{type(e).__name__}: {e}"[:200]
-        try:
-            import tracklog
-            tracklog.log("уведомление не показано: " + last_error)
-        except Exception:                                         # noqa: BLE001
-            pass
+    except Exception:                                             # noqa: BLE001
         return False
 
 

@@ -196,8 +196,7 @@ class BackupScreen(Popup):
                                 f"{os.path.basename(path)}")
             return
         self.status.text = f"Копия в «Загрузках» ({size}). Выберите, куда отправить."
-        backup.share(uri, text="Резервная копия наблюдений грибника",
-                     title="Куда отправить копию")
+        backup.share(uri, text="Резервная копия наблюдений грибника")
 
     def _busy(self, on):
         for b in (self.b_records, self.b_full, self.b_restore):

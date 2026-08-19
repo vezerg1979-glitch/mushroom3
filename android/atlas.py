@@ -832,12 +832,8 @@ else:
             self._color.rgba = hexc(palette.SOFT_ALT if self.state == "down"
                                     else palette.SOFT)
 
-    def picker(on_pick, title="Что нашли?", plain="Просто метка", recent=""):
+    def picker(on_pick, title="Что нашли?", plain="Просто метка"):
         """Список видов с эталонами. on_pick(key) — выбранный вид, "" — без вида.
-
-        recent — вид, отмеченный последним: он поднимается наверх списка.
-        Грибы идут сериями: нашёл белый — через десять шагов ещё белый, и
-        мокрым пальцем в перчатке до него каждый раз прокручивать.
 
         Живёт здесь, а не в экране похода, потому что мест, где вид
         выбирают, стало два: постановка метки и исправление уже поставленной.
@@ -867,10 +863,7 @@ else:
             if on_pick:
                 on_pick(key)
 
-        order = list(engine.SPECIES.items())
-        if recent in engine.SPECIES:
-            order.sort(key=lambda kv: kv[0] != recent)
-        for key, sp_obj in order:
+        for key, sp_obj in engine.SPECIES.items():
             line = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(6))
             row = SpeciesRow(key, sp_obj)
             row.bind(on_release=lambda _r, k=key: choose(k))

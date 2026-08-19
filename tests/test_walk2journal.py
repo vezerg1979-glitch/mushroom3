@@ -7,10 +7,7 @@ import time
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from apppath import APP  # noqa: E402
-
-sys.path.insert(0, APP)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "android"))
 
 import journal  # noqa: E402
 import track  # noqa: E402

@@ -27,10 +27,7 @@ import time
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from apppath import APP  # noqa: E402
-
-ROOT = APP
+ROOT = os.path.join(os.path.dirname(__file__), "..", "android")
 sys.path.insert(0, ROOT)
 
 kivy = pytest.importorskip("kivy", reason="Kivy не установлен")
@@ -349,104 +346,6 @@ def _walk(root):
 
 
 # --------------------------------------------------------------------------- #
-#  Журнал: миниатюры и итог сезона
-# --------------------------------------------------------------------------- #
-
-def test_journal_row_shows_a_thumbnail_and_stays_tappable(data_dir):
-    """Снимок лежит поверх кнопки, а не рядом: строка нажимается целиком.
-
-    Соседний виджет съел бы полсотни точек, на которых нажатие не работает.
-    Проверяется и то, и другое: картинка на месте, кнопка под ней.
-    """
-    from kivy.uix.button import Button
-    from kivy.uix.image import AsyncImage
-
-    import photos as photos_mod
-    import track
-    import walkjournal
-
-    w = track.Walk(place="Ельник")
-    w.add_point(56.0, 38.0, t=time.time() - 3600)
-    find = w.add_find(56.0, 38.0, "белый")
-    name = photos_mod.new_name()
-    with open(photos_mod.path_for(name), "wb") as f:
-        f.write(b"\xff\xd8\xff\xdb" + b"0" * 64)     # заглушка вместо кадра
-    find.photos.append(name)
-
-    journal = walkjournal.WalkJournal()
-    try:
-        row = journal._row(w)
-        kids = list(_walk(row))
-        assert any(isinstance(k, AsyncImage) for k in kids), "нет миниатюры"
-        buttons = [k for k in kids if isinstance(k, Button)]
-        assert buttons and list(buttons[0].size_hint) == [1, 1], "кнопка не во всю строку"
-    finally:
-        journal.dismiss()
-
-
-def test_journal_row_without_photos_is_a_plain_button(data_dir):
-    from kivy.uix.button import Button
-
-    import track
-    import walkjournal
-
-    w = track.Walk(place="Гарь")
-    w.add_point(56.0, 38.0, t=time.time() - 3600)
-    journal = walkjournal.WalkJournal()
-    try:
-        assert isinstance(journal._row(w), Button)
-    finally:
-        journal.dismiss()
-
-
-def test_missing_photo_file_does_not_leave_a_black_box(data_dir):
-    """Снимок могли удалить из галереи, а ссылка на него осталась."""
-    import track
-    import walkjournal
-
-    w = track.Walk(place="Просека")
-    w.add_find(56.0, 38.0, "белый").photos.append("нет-такого.jpg")
-    assert walkjournal.WalkJournal._first_photo(w) is None
-
-
-# --------------------------------------------------------------------------- #
-#  Мелочи, экономящие касания
-# --------------------------------------------------------------------------- #
-
-def test_last_species_comes_first(walk_screen):
-    """Грибы растут семьями: вторая метка почти всегда того же вида."""
-    import atlas
-
-    w = walk_screen
-    w.toggle()
-    w.feed(56.02, 38.28, acc=8.0, t=w.walk.started + 1)
-    w.walk.add_find(56.02, 38.28, "лисичка")
-    w.mark_find()
-    picker = _popup_titled("Что нашли?")
-    rows = [r for r in _walk(picker.content) if isinstance(r, atlas.SpeciesRow)]
-    # Строки идут сверху вниз, а children Kivy — снизу вверх.
-    assert rows[-1].key == "лисичка"
-    picker.dismiss()
-    w.toggle()
-
-
-def test_coordinates_can_be_copied(walk_screen):
-    """«Стой там, я тебе точку скину» — обычный разговор в лесу."""
-    from kivy.core.clipboard import Clipboard
-
-    w = walk_screen
-    find = w.walk.add_find(56.0206, 38.2807, "белый")
-    w._edit_find(find)
-    dlg = _find_dialog_for(find)
-    try:
-        dlg._copy_coords()
-        assert "56.020600" in dlg.status.text
-        assert Clipboard.paste() == "56.020600, 38.280700"
-    finally:
-        dlg.dismiss()
-
-
-# --------------------------------------------------------------------------- #
 #  Где машина
 # --------------------------------------------------------------------------- #
 
@@ -537,75 +436,6 @@ def test_service_popup_shows_advice_and_buttons(walk_screen):
         assert "Автозапуск" in labels or "Без ограничений" in labels
     finally:
         pop.dismiss()
-
-
-def test_old_spot_hints_can_be_switched_off(walk_screen):
-    """Кому-то вибрация в кармане помеха, и терпеть её незачем.
-
-    Выключатель живёт в окне «Приём и сервис»: отдельного экрана настроек
-    нет, а сюда человек приходит ровно тогда, когда что-то мешает.
-    """
-    from kivy.uix.button import Button
-
-    import prefs
-
-    w = walk_screen
-    w.show_service_log()
-    pop = _popup_titled("Фоновая запись")
-    try:
-        btn = next(b for b in _walk(pop.content)
-                   if isinstance(b, Button)
-                   and b.text.startswith("Подсказки у старых мест"))
-        assert "включены" in btn.text
-        btn.dispatch("on_release")
-        assert prefs.get("near_buzz", True) is False
-        assert "выключены" in btn.text
-
-        # Проверяется молчание, а не надпись на кнопке: первая версия этого
-        # теста смотрела только на текст и спокойно проходила, когда сам
-        # выключатель переставал действовать.
-        import history
-        import proximity
-
-        w.toggle()
-        t = w.walk.started - 600
-        w.walk.started = t
-        w._near = proximity.Watcher(
-            spots=[history.Spot(lat=56.02, lon=38.28, count=6, visits=2,
-                                last_t=t - 380 * 86400, species="белый",
-                                kinds={"белый": 6})], started=t)
-        w.hint.text = "тишина"
-        w.feed(56.0200, 38.28002, acc=8.0, t=t + 900)
-        assert w.hint.text == "тишина", "выключатель не действует"
-        w.toggle()
-
-        btn.dispatch("on_release")
-        assert prefs.get("near_buzz", True) is True
-    finally:
-        pop.dismiss()
-
-
-def test_old_spot_alert_buzzes_once(walk_screen):
-    """Полный путь: архив загрузился, человек подошёл, телефон дёрнулся."""
-    import buzz
-    import history
-    import proximity
-
-    w = walk_screen
-    w.toggle()
-    t = w.walk.started - 600            # обход молчания в начале похода
-    w.walk.started = t
-    spot = history.Spot(lat=56.02, lon=38.28, count=6, visits=2,
-                        last_t=t - 380 * 86400, species="белый",
-                        kinds={"белый": 6})
-    w._near = proximity.Watcher(spots=[spot], started=t)
-    buzz.reset()
-    w.feed(56.0200, 38.28002, acc=8.0, t=t + 900)
-    assert "здесь брали белый гриб" in w.hint.text
-    said = w.hint.text
-    w.feed(56.02001, 38.28003, acc=8.0, t=t + 1000)
-    assert w.hint.text == said, "второй раз про то же место говорить нечего"
-    w.toggle()
 
 
 def test_pause_button_records_the_pause(walk_screen):

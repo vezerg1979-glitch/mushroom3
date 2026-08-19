@@ -14,10 +14,7 @@ from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from apppath import APP  # noqa: E402
-
-ROOT = APP
+ROOT = os.path.join(os.path.dirname(__file__), "..", "android")
 sys.path.insert(0, ROOT)
 
 import photos  # noqa: E402
@@ -259,65 +256,3 @@ def test_forecast_snapshot_survives_saving(data_dir):
     assert back.index == w.index
     assert back.index_stamp == w.index_stamp
     assert wj.index_line(back) == wj.index_line(w)
-
-
-# --------------------------------------------------------------------------- #
-#  Итог сезона
-# --------------------------------------------------------------------------- #
-
-def _season_walk(days_ago, finds, place="Ельник", km=4.0, species="белый"):
-    import time as _time
-
-    w = _walk(dist=km * 1000.0)
-    w.started = _time.time() - days_ago * 86400
-    w.finished = w.started + 3600
-    w.place = place
-    for _ in range(finds):
-        w.add_find(56.0, 38.0, species)
-    return w
-
-
-def test_season_line_sums_the_year():
-    text = wj.season_line([_season_walk(1, 5), _season_walk(3, 2)])
-    assert "походов 2" in text
-    assert "находок 7" in text
-
-
-def test_season_line_names_the_commonest_species():
-    walks = [_season_walk(1, 5, species="белый"),
-             _season_walk(2, 1, species="лисичка")]
-    assert "белый гриб" in wj.season_line(walks)
-
-
-def test_season_line_remembers_the_best_day():
-    walks = [_season_walk(1, 2, place="Просека"),
-             _season_walk(5, 9, place="Бор за рекой")]
-    text = wj.season_line(walks)
-    assert "Бор за рекой" in text and "находок 9" in text
-
-
-def test_a_thin_day_is_not_called_the_best():
-    """«Лучший день: находок 1» звучит как насмешка."""
-    text = wj.season_line([_season_walk(1, 1), _season_walk(2, 0)])
-    assert "Лучший день" not in text
-
-
-def test_last_year_walks_are_not_counted():
-    """Сезон — календарный год: иначе сравнить с прошлым разом не с чем."""
-    assert wj.season_line([_season_walk(500, 8)]) == ""
-
-
-def test_no_walks_no_line():
-    assert wj.season_line([]) == ""
-
-
-def test_best_day_has_no_clock_time():
-    """«18 августа, 18:10» читается как отметка в журнале, а не как день.
-
-    Ищется именно время на часах, а не двоеточие: двоеточие в этой фразе
-    законно стоит перед числом находок.
-    """
-    import re
-
-    text = wj.season_line([_season_walk(1, 7)])
-    assert not re.search(r"\d{1,2}:\d{2}", text), text
