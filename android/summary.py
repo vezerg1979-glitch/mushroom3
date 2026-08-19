@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import time
+
 import mushroom_forecast as engine
 
 RU_MONTH = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
@@ -179,4 +181,52 @@ def personal_scale(walks) -> str:
     return (f"По {len(data)} походам чёткой границы не видно: удачные "
             f"выезды случались и при {lo:.0f}, пустые — и при {hi:.0f}.")
 
+# --------------------------------------------------------------------------- #
+#  Итог сезона
+# --------------------------------------------------------------------------- #
+#
+# Строка, ради которой журнал открывают зимой. Всё нужное уже посчитано по
+# походам, но лежит порознь: чтобы понять, каким был сентябрь, человеку
+# приходится листать список и складывать в уме.
 
+def season_line(walks, now: float = None) -> str:
+    """Итог текущего сезона одной фразой. Пусто — сезон ещё не начался.
+
+    Сезоном считается календарный год: грибной год в средней полосе
+    укладывается в него целиком, а «скользящие двенадцать месяцев» человек
+    в уме не держит и сравнить с прошлым разом не сможет.
+    """
+    now = now or time.time()
+    year = time.localtime(now).tm_year
+    mine = [w for w in walks if time.localtime(w.started).tm_year == year]
+    if not mine:
+        return ""
+    km = sum(w.distance for w in mine) / 1000.0
+    finds = sum(len(w.finds) for w in mine)
+    bits = [f"{year} год: походов {len(mine)}",
+            f"{km:.0f} км" if km >= 10 else f"{km:.1f} км".replace(".", ",")]
+    if finds:
+        bits.append(f"находок {finds}")
+    out = ", ".join(bits)
+
+    counts = {}
+    for w in mine:
+        for f in w.finds:
+            if f.species:
+                counts[f.species] = counts.get(f.species, 0) + max(1, f.count)
+    if counts:
+        key = max(counts, key=lambda k: counts[k])
+        name = (engine.SPECIES[key].name.lower()
+                if key in engine.SPECIES else key)
+        out += f". Чаще всего — {name} ({counts[key]})"
+
+    best = max(mine, key=lambda w: len(w.finds))
+    if len(best.finds) >= 3:
+        # Лучший день называется по месту и дате — именно его вспоминают, а
+        # не среднее по сезону. Время суток здесь лишнее: «18 августа,
+        # 18:10» читается как отметка в журнале, а не как день.
+        d = datetime.fromtimestamp(best.started)
+        out += (f". Лучший день — {d.day} {RU_MONTH[d.month - 1]}"
+                + (f", {best.place}" if best.place else "")
+                + f": находок {len(best.finds)}")
+    return out

@@ -22,6 +22,7 @@ donate.py — окно «Поддержать проект».
 from __future__ import annotations
 
 import palette
+import theme
 
 # --------------------------------------------------------------------------- #
 #  Реквизиты
@@ -113,15 +114,28 @@ OUTRO = """Приложение бесплатное и таким остане�
 # Цвета и арифметика контраста — из общего palette.py. Имена с суффиксом
 # _HEX оставлены прежними: на них ссылается код окна и тесты.
 
-BG_HEX = palette.CARD          # окно доната — белая карточка
-INK_HEX = palette.INK
-MUTED_HEX = palette.MUTED
-ACCENT_HEX = palette.ACCENT
-SOFT_HEX = palette.SOFT
-ON_DARK_HEX = palette.ON_DARK
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
 
-MIN_CONTRAST = palette.MIN_CONTRAST
-MIN_CONTRAST_LARGE = palette.MIN_CONTRAST_LARGE
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global BG_HEX, INK_HEX, MUTED_HEX, ACCENT_HEX, SOFT_HEX, ON_DARK_HEX, MIN_CONTRAST, MIN_CONTRAST_LARGE
+    BG_HEX = palette.CARD          # окно доната — белая карточка
+    INK_HEX = palette.INK
+    MUTED_HEX = palette.MUTED
+    ACCENT_HEX = palette.ACCENT
+    SOFT_HEX = palette.SOFT
+    ON_DARK_HEX = palette.ON_DARK
+
+    MIN_CONTRAST = palette.MIN_CONTRAST
+    MIN_CONTRAST_LARGE = palette.MIN_CONTRAST_LARGE
+
+
+_apply_palette()
+theme.register(_apply_palette)
 
 luminance = palette.luminance
 contrast = palette.contrast

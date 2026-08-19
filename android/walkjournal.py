@@ -19,11 +19,13 @@ walkjournal.py — журнал походов: что было в прошлы�
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.button import Button
 from kivy.uix.image import AsyncImage
 from kivy.uix.label import Label
@@ -34,22 +36,41 @@ from kivy.utils import get_color_from_hex as hexc
 import mushroom_forecast as engine
 import markup
 import palette
+import theme
+import backup
 import photos as photos_mod
 import track as track_mod
 # Подписи живут в summary.py: там нет ни одного виджета, поэтому их можно
 # проверять на машине без Kivy — например, на сборочной.
-from summary import (index_line, personal_scale, species_line,
-                     stats_line, when_text)
+from summary import (index_line, personal_scale, season_line,
+                     species_line, stats_line, when_text)
 from finddialog import show_photo
 from mapview import TileMap
 
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-CARD = hexc(palette.CARD)
-SOFT = hexc(palette.SOFT)
-ACCENT = hexc(palette.ACCENT)
-RED = hexc(palette.RED)
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
+
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global INK, MUTED, CARD, SOFT, ACCENT, RED
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    CARD = hexc(palette.CARD)
+    SOFT = hexc(palette.SOFT)
+    ACCENT = hexc(palette.ACCENT)
+    RED = hexc(palette.RED)
+
+
+_apply_palette()
+theme.register(_apply_palette)
 TOUCH = dp(48)
+GPX_MIME = "application/gpx+xml"
+#: Миниатюра в строке списка: список листают глазами, а снимок
+#: узнаётся быстрее, чем читается название места.
+ROW_THUMB = dp(56)
 THUMB = dp(72)
 
 def _fill(widget, color):
@@ -173,12 +194,42 @@ class WalkCard(Popup):
 
     # --- действия -----------------------------------------------------------
     def _export(self):
+        """Трек в GPX — и сразу человеку в руки.
+
+        Раньше файл писался во внутренний каталог приложения и оттуда
+        сообщался путь вида /data/user/0/ru.grezev.../tracks/2026-08-01.gpx.
+        Достать его человек не мог ничем: это закрытая память приложения.
+        Кнопка формально работала, а по сути нет.
+
+        Теперь тот же файл кладётся в общие «Загрузки» (там его видит любой
+        проводник и компьютер по USB) и передаётся системе — оттуда трек
+        уходит другу в мессенджер или открывается в OsmAnd. Механика та же,
+        что у резервной копии, поэтому и живёт в backup.
+        """
         try:
             path = track_mod.export_gpx(self.walk)
         except (OSError, ValueError) as e:
             self.status.text = f"Не выгрузилось: {e}"
             return
-        self.status.text = f"Сохранено: {path}"
+        if not backup.on_android():
+            self.status.text = f"Сохранено: {path}"
+            return
+        try:
+            uri = backup.publish(path, mime=GPX_MIME)
+        except Exception as e:                                    # noqa: BLE001
+            self.status.text = f"Не выгрузилось: {type(e).__name__}: {e}"[:120]
+            return
+        name = os.path.basename(path)
+        if uri is None:
+            # Android 9 и старше: content-ссылки нет, отдать файл системе
+            # нельзя — но в «Загрузках» он лежит, и это уже не тупик.
+            self.status.text = f"Трек сохранён в «Загрузки»: {name}"
+            return
+        self.status.text = f"Трек в «Загрузках» ({name}). Выберите, куда отправить."
+        backup.share(uri, subject=f"Трек: {self.walk.place or 'поход'}",
+                     text="Маршрут в формате GPX — открывается в OsmAnd, "
+                          "Google Earth и других картах.",
+                     mime=GPX_MIME, title="Куда отправить трек")
 
     def _confirm_delete(self):
         """Удаление в два шага: поход не восстановить, а кнопка рядом с «Закрыть»."""
@@ -282,6 +333,19 @@ class WalkJournal(Popup):
         scale = personal_scale(walks)
         if scale:
             self.total.text += "\n" + scale
+        # Итог сезона — то, ради чего журнал открывают зимой. Всё это
+        # посчитано и по отдельным походам, но чтобы понять, каким был
+        # сентябрь, человеку пришлось бы листать список и складывать в уме.
+        # Итог сезона показывается, только если есть с чем его сравнивать.
+        # У человека первого года он слово в слово повторял бы строку выше:
+        # те же походы, те же километры, те же находки.
+        import time as _time
+
+        year = _time.localtime().tm_year
+        if any(_time.localtime(w.started).tm_year != year for w in walks):
+            season = season_line(walks)
+            if season:
+                self.total.text += "\n" + season
 
         for walk in walks:
             self.list.add_widget(self._row(walk))
@@ -296,12 +360,15 @@ class WalkJournal(Popup):
         журнал и открывают.
         """
         hint = palette.MUTED.lstrip("#")
-        rows = [f"[b]{markup.esc(walk.place or 'без названия')}[/b]  "
-                f"[size=11sp][color={hint}]{when_text(walk)}[/color][/size]"]
+        # Дата ушла из первой строки к остальным цифрам: рядом с миниатюрой
+        # места на подпись меньше, и «Ельник у Гряды 17 / августа» ломалось
+        # пополам ровно посередине даты.
+        rows = [f"[b]{markup.esc(walk.place or 'без названия')}[/b]"]
         species = species_line(walk)
         if species:
             rows.append(f"[size=12sp]{species}[/size]")
-        rows.append(f"[size=11sp][color={hint}]{stats_line(walk)}[/color][/size]")
+        rows.append(f"[size=11sp][color={hint}]{when_text(walk)} · "
+                    f"{stats_line(walk)}[/color][/size]")
 
         btn = Button(text="\n".join(rows), markup=True, font_size=sp(14),
                      color=INK, background_normal="", background_color=SOFT,
@@ -311,7 +378,53 @@ class WalkJournal(Popup):
                  texture_size=lambda w, t: setattr(w, "height",
                                                    max(dp(64), t[1] + dp(18))))
         btn.bind(on_release=lambda *_: WalkCard(walk, on_change=self.reload).open())
-        return btn
+
+        shot = self._first_photo(walk)
+        if shot is None:
+            return btn
+        # Снимок кладётся ПОВЕРХ кнопки, а не рядом с ней. Соседний виджет
+        # съел бы полсотни точек, на которых нажатие не работает, — а строка
+        # должна нажиматься целиком, как и всё остальное в приложении.
+        # Картинка касания не перехватывает: Image их не обрабатывает и
+        # пропускает вниз, к кнопке.
+        #
+        # Во FloatLayout ребёнку нужны и pos_hint, и size_hint: без них
+        # кнопка встаёт в угол окна собственного размера, а строки списка
+        # наезжают друг на друга.
+        btn.padding = (dp(14) + ROW_THUMB, dp(8))
+        btn.size_hint = (1, 1)
+        btn.pos_hint = {"x": 0, "y": 0}
+        btn.bind(width=lambda w, x: setattr(w, "text_size",
+                                            (x - dp(24) - ROW_THUMB, None)))
+
+        holder = FloatLayout(size_hint_y=None,
+                             height=max(dp(64), btn.texture_size[1] + dp(18)))
+        btn.bind(texture_size=lambda w, t: setattr(
+            holder, "height", max(dp(64), t[1] + dp(18))))
+        img = AsyncImage(source=shot, fit_mode="cover", size_hint=(None, None),
+                         size=(ROW_THUMB, ROW_THUMB))
+        holder.add_widget(btn)
+        holder.add_widget(img)
+
+        def place(*_):
+            img.pos = (holder.x + dp(8), holder.center_y - ROW_THUMB / 2)
+
+        holder.bind(pos=place, size=place)
+        place()
+        return holder
+
+    @staticmethod
+    def _first_photo(walk):
+        """Первый уцелевший снимок похода или None.
+
+        Проверка существования не лишняя: снимок могли удалить из галереи
+        телефона, а ссылка на него в походе осталась. Пустой чёрный
+        прямоугольник в списке выглядит как поломка.
+        """
+        for name in walk.photo_names():
+            if photos_mod.exists(name):
+                return photos_mod.path_for(name)
+        return None
 
 
 def show():

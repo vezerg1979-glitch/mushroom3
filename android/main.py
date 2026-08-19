@@ -65,6 +65,7 @@ import icons
 import mushroom_forecast as engine
 import markup
 import palette
+import theme
 import places as places_mod
 import prefs
 import notify
@@ -80,18 +81,39 @@ from walkscreen import WalkScreen
 # Цвета живут в palette.py: один источник на все экраны, и там же проверка
 # контраста, которой заведует тест. Здесь только перевод в формат Kivy.
 
-BG = hexc(palette.BG)
-CARD = hexc(palette.CARD)
-GRID = hexc(palette.GRID)
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-ACCENT = hexc(palette.ACCENT)
-BLUE = hexc(palette.BLUE)
-RAIN = palette.RAIN
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
 
-LEVEL_COLORS = [(th, hexc(bg), hexc(fg)) for th, bg, fg in palette.LEVELS]
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global BG, CARD, GRID, INK, MUTED, ACCENT, BLUE, RAIN
+    global LEVEL_COLORS, SPECIES_COLORS
+    BG = hexc(palette.BG)
+    CARD = hexc(palette.CARD)
+    GRID = hexc(palette.GRID)
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    ACCENT = hexc(palette.ACCENT)
+    BLUE = hexc(palette.BLUE)
+    RAIN = palette.RAIN
 
-SPECIES_COLORS = palette.SPECIES
+    LEVEL_COLORS = [(th, hexc(bg), hexc(fg)) for th, bg, fg in palette.LEVELS]
+
+    SPECIES_COLORS = palette.SPECIES
+
+
+_apply_palette()
+theme.register(_apply_palette)
+
+
+@theme.register
+def _repaint_window():
+    """Фон окна живёт вне виджетов и пересборкой экрана не меняется."""
+    Window.clearcolor = hexc(palette.BG)
+
 
 #: Знак для полосок в объяснениях. Длинные тире смыкаются в сплошную линию,
 #: и, в отличие от блочных знаков, они в шрифте есть — проверено тестом.
@@ -101,7 +123,7 @@ BAR = "—"
 # промахиваются даже дома на диване, а в лесу телефон держат в перчатке.
 TOUCH = dp(48)
 
-Window.clearcolor = BG
+_repaint_window()
 
 
 def level_colors(v: float):
@@ -118,7 +140,11 @@ def level_colors(v: float):
 class Card(BoxLayout):
     """Прямоугольник со скруглением и фоном."""
 
-    def __init__(self, bg=CARD, radius=dp(10), **kw):
+    def __init__(self, bg=None, radius=dp(10), **kw):
+        # Цвет по умолчанию берётся при вызове, а не при объявлении:
+        # значения по умолчанию вычисляются один раз, при загрузке
+        # модуля, и после смены темы остались бы дневными.
+        bg = CARD if bg is None else bg
         super().__init__(**kw)
         self._bg = bg
         self._radius = radius
@@ -195,7 +221,11 @@ class Chart(Widget):
         return True
 
     # --- отрисовка --------------------------------------------------------
-    def _text(self, s, x, y, size=9, color=MUTED, anchor="left"):
+    def _text(self, s, x, y, size=9, color=None, anchor="left"):
+        # Цвет по умолчанию берётся при вызове, а не при объявлении:
+        # значения по умолчанию вычисляются один раз, при загрузке
+        # модуля, и после смены темы остались бы дневными.
+        color = MUTED if color is None else color
         lbl = CoreLabel(text=s, font_size=sp(size))
         lbl.refresh()
         t = lbl.texture
@@ -452,8 +482,24 @@ class MushroomApp(App):
         # сторону, иначе каждый раз начинал с чужого леса и лез в карту,
         # чтобы вернуться к своему.
         self.lat, self.lon, self._place_name = self._saved_place()
+        # Тема выбирается до сборки экрана: собранные виджеты перекрасить
+        # уже нельзя.
+        theme.apply(self.lat, self.lon)
         self.sel = None                      # выбранный вид или None = лучший
                                              # (восстанавливается ниже из prefs)
+        root = self._build_ui()
+        Clock.schedule_once(lambda *_: self.calculate(), 0.6)
+        return root
+
+    def _build_ui(self):
+        """Собирает экран из текущих цветов.
+
+        Вынесено из build отдельно ради смены темы: перекрасить уже
+        созданные виджеты нельзя — цвет фона у кнопки выставлен в
+        момент создания. Поэтому экран собирается заново, а данные
+        (место, прогноз, выбранный вид) остаются в приложении и
+        переживают пересборку.
+        """
         root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
 
         # --- строка места ---
@@ -475,6 +521,18 @@ class MushroomApp(App):
                         color=ACCENT)
         b_star.bind(on_release=lambda *_: self.save_spot())
         top.add_widget(b_star)
+        # Переключатель темы. Три состояния по кругу, а не отдельный экран
+        # настроек: ради одной настройки экран заводить не из-за чего, а по
+        # кругу человек проходит их за два касания. Подпись показывает и
+        # выбор, и что из него вышло: «Авто · ночь» — иначе непонятно,
+        # почему экран тёмный.
+        self.b_theme = Button(text=theme.label(), size_hint_x=None,
+                              width=TOUCH + dp(30), font_size=sp(11),
+                              background_normal="", background_color=CARD,
+                              color=MUTED)
+        self.b_theme.bind(on_release=lambda *_: self.switch_theme())
+        top.add_widget(self.b_theme)
+
         b_help = Button(text="?", size_hint_x=None, width=TOUCH, font_size=sp(16),
                         bold=True, background_normal="", background_color=CARD,
                         color=MUTED)
@@ -608,8 +666,38 @@ class MushroomApp(App):
                             color=MUTED, size_hint_y=None, height=dp(18))
         root.add_widget(self.status)
 
-        Clock.schedule_once(lambda *_: self.calculate(), 0.6)
         return root
+
+    def switch_theme(self, mode=None):
+        """Следующая тема по кругу и пересборка экрана.
+
+        Прогноз при этом не пересчитывается: он уже посчитан и лежит в
+        self.res, а лезть в сеть из-за смены цветов — это и ожидание, и
+        трафик там, где человек просто хотел, чтобы не слепило.
+        """
+        theme.set_mode(mode or theme.next_mode(), self.lat, self.lon)
+        self._repaint()
+
+    def _apply_theme_now(self):
+        """Пересчитывает «авто» и перекрашивает, если тема сменилась."""
+        before = palette.current()
+        theme.apply(self.lat, self.lon)
+        if palette.current() != before:
+            self._repaint()
+
+    def _repaint(self):
+        """Пересобирает экран под текущие цвета, сохраняя состояние."""
+        from kivy.core.window import Window
+
+        old = self.root
+        new = self._build_ui()
+        if old is not None and old.parent is not None:
+            old.parent.remove_widget(old)
+        Window.add_widget(new)
+        self.root = new
+        if self.res is not None:
+            self.refresh()
+        self.b_theme.text = theme.label()
 
     def _fit_chart(self, *_):
         """График занимает треть экрана, но не меньше 150 и не больше 230 dp."""

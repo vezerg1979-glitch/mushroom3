@@ -28,6 +28,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.utils import get_color_from_hex as hexc
 
 import palette
+import theme
 
 import atlas
 import buzz
@@ -44,18 +45,33 @@ import sun
 import track as track_mod
 import tracklog
 import photos as photos_mod
+import prefs
+import proximity
 import power
 from finddialog import FindDialog
 from mapview import TileMap
 from navwidget import NavArrow
 
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-CARD = hexc(palette.CARD)
-ACCENT = hexc(palette.ACCENT)
-RED = hexc(palette.RED)
-BLUE = hexc(palette.BLUE)
-FADED = hexc(palette.FADED)
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
+
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global INK, MUTED, CARD, ACCENT, RED, BLUE, FADED
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    CARD = hexc(palette.CARD)
+    ACCENT = hexc(palette.ACCENT)
+    RED = hexc(palette.RED)
+    BLUE = hexc(palette.BLUE)
+    FADED = hexc(palette.FADED)
+
+
+_apply_palette()
+theme.register(_apply_palette)
 
 # Сколько ждать признаков жизни от фонового сервиса, секунды. Ожидание
 # неблокирующее: окно всё это время остаётся отзывчивым.
@@ -78,7 +94,11 @@ def _fill(widget, color):
 class Counter(BoxLayout):
     """Крупное число с подписью."""
 
-    def __init__(self, title, value="—", color=INK, **kw):
+    def __init__(self, title, value="—", color=None, **kw):
+        # Цвет по умолчанию берётся при вызове, а не при объявлении:
+        # значения по умолчанию вычисляются один раз, при загрузке
+        # модуля, и после смены темы остались бы дневными.
+        color = INK if color is None else color
         super().__init__(orientation="vertical", **kw)
         self.lbl = Label(text=value, font_size=sp(22), bold=True, color=color)
         self.add_widget(self.lbl)
@@ -120,6 +140,7 @@ class WalkScreen(Popup):
         self._compass_on = self._compass.start()
 
         self._car_moved_said = False       # про переезд машины сказали один раз
+        self._near = None                  # сторож старых мест, ждёт архива
         self._nav_target = None            # None — навигация выключена,
                                            # "start" — к началу маршрута,
                                            # объект с lat/lon — к метке
@@ -232,7 +253,11 @@ class WalkScreen(Popup):
         # Заодно каждая кнопка получает text_size: если надпись всё же длиннее
         # места, она обрежется многоточием внутри своей кнопки, а не поверх
         # соседней.
-        def small(text, action, color=INK):
+        def small(text, action, color=None):
+            # Цвет по умолчанию берётся при вызове, а не при объявлении:
+            # значения по умолчанию вычисляются один раз, при загрузке
+            # модуля, и после смены темы остались бы дневными.
+            color = INK if color is None else color
             # Подпись в две строки и обрезание многоточием несовместимы:
             # shorten сминает всё в одну строку, и «Заметка\nи фото»
             # превращается в «Заметка и фо…». Поэтому перенос строки
@@ -314,6 +339,10 @@ class WalkScreen(Popup):
     def _history_ready(self, h):
         self.map.history = h
         self.map.redraw()
+        # Тот же архив идёт и в сторож приближения: места находок уже слиты
+        # по расстоянию, считать их заново незачем.
+        self._near = proximity.Watcher(spots=list(h.spots),
+                                       started=self.walk.started)
         # Подпись показывается только до старта: во время записи там идут
         # сообщения поважнее — приём, метки, паузы.
         if not self.running and h:
@@ -641,11 +670,27 @@ class WalkScreen(Popup):
         if self.running:
             self.walk.add_point(lat, lon, acc, t)
             self._car_follows_the_drive()
+            self._check_old_spots(lat, lon, acc, t)
         else:
             self.walk.last_acc = acc
         self._last_fix = time.time()
         self.map.set_here(lat, lon)
         self._refresh()
+
+    def _check_old_spots(self, lat, lon, acc, t):
+        """Короткая вибрация рядом с прошлогодней находкой.
+
+        Правила молчания — в proximity.Watcher: их там больше, чем правил
+        срабатывания, и это правильно. Здесь остаётся только тронуть и
+        подписать.
+        """
+        if self._near is None or not prefs.get("near_buzz", True):
+            return
+        hit = self._near.check(lat, lon, acc, t)
+        if hit is None:
+            return
+        buzz.tap()
+        self.hint.text = hit.text
 
     def _car_follows_the_drive(self):
         """Пока человек едет, отметка машины едет вместе с ним.
@@ -708,8 +753,14 @@ class WalkScreen(Popup):
         self._species_dialog()
 
     def _species_dialog(self):
-        """Выбор вида. Сам список живёт в atlas: им пользуется и карточка метки."""
-        atlas.picker(self._add_find)
+        """Выбор вида. Сам список живёт в atlas: им пользуется и карточка метки.
+
+        Последний отмеченный вид поднимается наверх: грибы растут семьями, и
+        вторая метка почти всегда того же вида, что первая.
+        """
+        last = next((f.species for f in reversed(self.walk.finds) if f.species),
+                    "")
+        atlas.picker(self._add_find, recent=last)
 
     def _add_find(self, key):
         """Метка ставится сразу, карточка открывается следом.
@@ -968,6 +1019,27 @@ class WalkScreen(Popup):
                  texture_size=lambda w, t: setattr(w, "height", t[1] + dp(16)))
         sv.add_widget(lbl)
         box.add_widget(sv)
+
+        # Выключатель подсказок у старых мест стоит здесь, в окне «Приём и
+        # сервис». Отдельного экрана настроек в приложении нет, а идут сюда
+        # ровно тогда, когда что-то в походе мешает или ведёт себя не так, —
+        # то есть в ту самую минуту, когда человек и хочет это отключить.
+        b_near = Button(size_hint_y=None, height=dp(46), font_size=sp(13),
+                        background_normal="",
+                        background_color=hexc(palette.SOFT), color=INK)
+
+        def near_label():
+            on = prefs.get("near_buzz", True)
+            b_near.text = ("Подсказки у старых мест: включены" if on
+                           else "Подсказки у старых мест: выключены")
+
+        def near_toggle(*_):
+            prefs.save(near_buzz=not prefs.get("near_buzz", True))
+            near_label()
+
+        near_label()
+        b_near.bind(on_release=near_toggle)
+        box.add_widget(b_near)
 
         row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         b_bat = Button(text="Батарея", font_size=sp(13), background_normal="",

@@ -33,15 +33,29 @@ from kivy.uix.textinput import TextInput
 from kivy.utils import get_color_from_hex as hexc
 
 import palette
+import theme
 import tiles
 import tilesource
 
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-CARD = hexc(palette.CARD)
-SOFT = hexc(palette.SOFT)
-ACCENT = hexc(palette.ACCENT)
-RED = hexc(palette.RED)
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
+
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global INK, MUTED, CARD, SOFT, ACCENT, RED
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    CARD = hexc(palette.CARD)
+    SOFT = hexc(palette.SOFT)
+    ACCENT = hexc(palette.ACCENT)
+    RED = hexc(palette.RED)
+
+
+_apply_palette()
+theme.register(_apply_palette)
 TOUCH = dp(48)
 
 RADII = ("1 км", "2 км", "3 км", "5 км")
@@ -55,7 +69,11 @@ def _fill(widget, color):
                 size=lambda w, v: setattr(rect, "size", v))
 
 
-def _label(text, size=12, color=MUTED, bold=False):
+def _label(text, size=12, color=None, bold=False):
+    # Цвет по умолчанию берётся при вызове, а не при объявлении:
+    # значения по умолчанию вычисляются один раз, при загрузке
+    # модуля, и после смены темы остались бы дневными.
+    color = MUTED if color is None else color
     lbl = Label(text=text, font_size=sp(size), color=color, bold=bold,
                 markup=True, halign="left", valign="top", size_hint_y=None)
     lbl.bind(width=lambda w, x: setattr(w, "text_size", (x, None)),
@@ -63,7 +81,12 @@ def _label(text, size=12, color=MUTED, bold=False):
     return lbl
 
 
-def _button(text, action, color=INK, bg=SOFT, bold=False, size=13):
+def _button(text, action, color=None, bg=None, bold=False, size=13):
+    # Цвет по умолчанию берётся при вызове, а не при объявлении:
+    # значения по умолчанию вычисляются один раз, при загрузке
+    # модуля, и после смены темы остались бы дневными.
+    color = INK if color is None else color
+    bg = SOFT if bg is None else bg
     b = Button(text=text, font_size=sp(size), bold=bold, background_normal="",
                background_color=bg, color=color, halign="center",
                valign="middle", shorten=True, shorten_from="right")

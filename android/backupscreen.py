@@ -31,13 +31,27 @@ from kivy.utils import get_color_from_hex as hexc
 
 import backup
 import palette
+import theme
 
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-CARD = hexc(palette.CARD)
-ACCENT = hexc(palette.ACCENT)
-SOFT = hexc(palette.SOFT)
-RED = hexc(palette.RED)
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
+
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global INK, MUTED, CARD, ACCENT, SOFT, RED
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    CARD = hexc(palette.CARD)
+    ACCENT = hexc(palette.ACCENT)
+    SOFT = hexc(palette.SOFT)
+    RED = hexc(palette.RED)
+
+
+_apply_palette()
+theme.register(_apply_palette)
 TOUCH = dp(48)
 
 
@@ -196,7 +210,8 @@ class BackupScreen(Popup):
                                 f"{os.path.basename(path)}")
             return
         self.status.text = f"Копия в «Загрузках» ({size}). Выберите, куда отправить."
-        backup.share(uri, text="Резервная копия наблюдений грибника")
+        backup.share(uri, text="Резервная копия наблюдений грибника",
+                     title="Куда отправить копию")
 
     def _busy(self, on):
         for b in (self.b_records, self.b_full, self.b_restore):

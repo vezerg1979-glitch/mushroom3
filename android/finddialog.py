@@ -33,14 +33,28 @@ from kivy.graphics import Color, Rectangle
 import atlas
 import mushroom_forecast as engine
 import palette
+import theme
 import photos as photos_mod
 
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-CARD = hexc(palette.CARD)
-ACCENT = hexc(palette.ACCENT)
-RED = hexc(palette.RED)
-SOFT = hexc(palette.SOFT)
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
+
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global INK, MUTED, CARD, ACCENT, RED, SOFT
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    CARD = hexc(palette.CARD)
+    ACCENT = hexc(palette.ACCENT)
+    RED = hexc(palette.RED)
+    SOFT = hexc(palette.SOFT)
+
+
+_apply_palette()
+theme.register(_apply_palette)
 
 THUMB = dp(84)
 
@@ -153,6 +167,15 @@ class FindDialog(Popup):
         cnt.add_widget(stepper("−", -1))
         cnt.add_widget(self.count)
         cnt.add_widget(stepper("+", 1))
+        # Координаты рядом со счётчиком, а не отдельной строкой: место в
+        # карточке дорогое, а нажимают эту кнопку редко — зато метко.
+        # «Стой там, я тебе точку скину» — обычный разговор в лесу, а до
+        # сих пор передать точку было нечем.
+        b_coord = Button(text="Координаты", size_hint_x=None, width=dp(104),
+                         font_size=sp(12), background_normal="",
+                         background_color=SOFT, color=INK)
+        b_coord.bind(on_release=lambda *_: self._copy_coords())
+        cnt.add_widget(b_coord)
         box.add_widget(cnt)
 
         box.add_widget(self.status)
@@ -213,6 +236,23 @@ class FindDialog(Popup):
         b.bind(on_release=lambda *_: atlas.card(key, species,
                                                 on_change=self._ask_species))
         self.ref_slot.add_widget(b)
+
+    def _copy_coords(self):
+        """Координаты метки в буфер обмена.
+
+        Формат «55.960600, 38.045600» намеренно самый скучный: его понимают
+        и карты Яндекса, и Google, и OsmAnd, и человек на том конце может
+        просто вставить строку в поиск. Красивые градусы с минутами
+        выглядят солиднее, но их половина программ не разбирает.
+        """
+        text = f"{self.find.lat:.6f}, {self.find.lon:.6f}"
+        try:
+            from kivy.core.clipboard import Clipboard
+            Clipboard.copy(text)
+        except Exception as e:                                    # noqa: BLE001
+            self.status.text = f"Не удалось скопировать: {text}"
+            return
+        self.status.text = f"Скопировано: {text}"
 
     def _ask_species(self):
         atlas.picker(self._set_species, title="Какой это вид?")

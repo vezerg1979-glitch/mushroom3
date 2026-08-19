@@ -27,11 +27,25 @@ from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
 import palette
+import theme
 
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-ACCENT = hexc(palette.ACCENT)
-ARRIVED = hexc(palette.BLUE)
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
+
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global INK, MUTED, ACCENT, ARRIVED
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    ACCENT = hexc(palette.ACCENT)
+    ARRIVED = hexc(palette.BLUE)
+
+
+_apply_palette()
+theme.register(_apply_palette)
 
 
 class NavArrow(Widget):
@@ -49,7 +63,11 @@ class NavArrow(Widget):
         self.title = title
         self.redraw()
 
-    def _text(self, s, cx, y, size=11, color=MUTED, bold=False):
+    def _text(self, s, cx, y, size=11, color=None, bold=False):
+        # Цвет по умолчанию берётся при вызове, а не при объявлении:
+        # значения по умолчанию вычисляются один раз, при загрузке
+        # модуля, и после смены темы остались бы дневными.
+        color = MUTED if color is None else color
         lbl = CoreLabel(text=s, font_size=sp(size), bold=bold)
         lbl.refresh()
         t = lbl.texture

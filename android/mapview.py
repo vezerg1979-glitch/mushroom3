@@ -36,21 +36,39 @@ from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
 import palette
+import theme
 import tilesource
 
 import mushroom_forecast as engine
 import places as places_mod
 
 TILE = 256
+
+#: Насколько гасится карта ночью. Больше — темнее; при 0.7 подписи на
+#: карте перестают читаться совсем, при 0.3 она всё ещё слепит.
+MAP_DIM = 0.55
 MIN_Z, MAX_Z = 3, 17
 # Адрес тайлов намеренно не зашит в код: правила OSM это прямо советуют, а
 # офлайн-карта вообще требует другого источника — см. tilesource.py.
 UA = "mushroom-forecast/2.9 (personal use)"
 
-INK = hexc(palette.INK)
-MUTED = hexc(palette.MUTED)
-CARD = hexc(palette.CARD)
-ACCENT = hexc(palette.ACCENT)
+def _apply_palette():
+    """Перечитывает цвета после смены темы.
+
+    Цвета копируются в константы модуля при загрузке — так быстрее, но
+    после переключения копии остаются прежними. theme вызывает эту функцию
+    и пересобирает экран: у виджета цвет выставлен в момент создания, и
+    задним числом палитра его не изменит.
+    """
+    global INK, MUTED, CARD, ACCENT
+    INK = hexc(palette.INK)
+    MUTED = hexc(palette.MUTED)
+    CARD = hexc(palette.CARD)
+    ACCENT = hexc(palette.ACCENT)
+
+
+_apply_palette()
+theme.register(_apply_palette)
 GRIDC = hexc("#D5D0C4")
 
 
@@ -342,7 +360,11 @@ class TileMap(Widget):
                        right[0], right[1], 0, 0],
              indices=[0, 1, 2, 0, 2, 3], mode="triangles")
 
-    def _text(self, s, x, y, size=9, color=MUTED):
+    def _text(self, s, x, y, size=9, color=None):
+        # Цвет по умолчанию берётся при вызове, а не при объявлении:
+        # значения по умолчанию вычисляются один раз, при загрузке
+        # модуля, и после смены темы остались бы дневными.
+        color = MUTED if color is None else color
         lbl = CoreLabel(text=s, font_size=sp(size))
         lbl.refresh()
         Color(*color)
@@ -442,7 +464,7 @@ class TileMap(Widget):
             StencilPush()
             Rectangle(pos=self.pos, size=self.size)
             StencilUse()
-            Color(0.91, 0.90, 0.86, 1)
+            Color(*hexc(palette.MAP_BASE))
             Rectangle(pos=self.pos, size=self.size)
             for tx in range(x0, x1 + 1):
                 for ty in range(y0, y1 + 1):
@@ -462,6 +484,16 @@ class TileMap(Widget):
                             lat, lon = num2deg(tx, ty, self.zoom)
                             self._text(f"{lat:.2f}, {lon:.2f}", sx + dp(5),
                                        sy + TILE - dp(16), 8)
+            # Ночью карта затемняется полупрозрачной пеленой. Сами тайлы
+            # светлые: рисуются они для дневного глаза, и в темноте лист
+            # карты работает как фонарь — привыкание к темноте сгорает за
+            # секунду, а под пологом леса после этого не видно ничего.
+            # Пелена ложится ПОД маршрутом и метками: их приглушать нельзя,
+            # ради них карту и открывают.
+            if palette.current() == "ночь":
+                Color(0, 0, 0, MAP_DIM)
+                Rectangle(pos=self.pos, size=self.size)
+
             # Прошлые походы — под всем сегодняшним: подложка не должна
             # спорить с живым треком и своей точкой.
             if self.history is not None and self.show_history:

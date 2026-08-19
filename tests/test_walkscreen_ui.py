@@ -14,7 +14,10 @@ import sys
 
 import pytest
 
-ROOT = os.path.join(os.path.dirname(__file__), "..", "android")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from apppath import APP  # noqa: E402
+
+ROOT = APP
 sys.path.insert(0, ROOT)
 
 import compass  # noqa: E402
@@ -142,7 +145,7 @@ def test_bottom_buttons_split_into_two_rows():
     # замысел, а не буква: раньше здесь стояло дословное shorten=True, и
     # тест упал на подписях в две строки, которые как раз и появились
     # затем, чтобы ничего не обрезалось.
-    small = src[src.index("def small("):src.index("def small(") + 800]
+    small = src[src.index("def small("):src.index("def small(") + 1200]
     assert "text_size" in small
     assert "shorten=" in small and "multiline" in small
 
