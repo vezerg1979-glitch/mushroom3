@@ -380,3 +380,42 @@ def test_no_stray_copies_of_tests_outside_the_tests_folder():
                                               project))
     assert not strays, ("копии файлов тестов вне tests/ — удалите их: "
                         + ", ".join(sorted(strays)))
+
+
+# --------------------------------------------------------------------------- #
+#  Чем запускаются тесты
+# --------------------------------------------------------------------------- #
+
+def test_core_tests_run_without_third_party_packages():
+    """Ядро должно проверяться на голом Python.
+
+    Настольная версия рассчитана ровно на это: человек скачивает скрипт и
+    запускает его без установки чего бы то ни было. Если модель начнёт
+    требовать pytest, узнать об этом надо здесь.
+    """
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    for name in ("test_model.py", "test_markup.py"):
+        with open(os.path.join(tests_dir, name), encoding="utf-8") as f:
+            src = f.read()
+        assert "import pytest" not in src, f"{name} перестал быть самостоятельным"
+
+
+def test_ci_runs_the_suite_with_pytest():
+    """Каталог тестов прогоняется тем, чем он написан.
+
+    В рабочем процессе стоял `unittest discover` по всему каталогу, и с
+    некоторых пор он не столько проверял, сколько падал: pytest на том шаге
+    ещё не установлен, а без него из двадцати семи файлов импортируются
+    два. APK при этом собирался, и красным горел шаг, который ничего не
+    успевал проверить.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, ".github", "workflows", "tests.yml"),
+              encoding="utf-8") as f:
+        wf = f.read()
+    шаги = [l for l in wf.splitlines()
+            if l.strip().startswith("run:") or l.startswith("          ")]
+    assert not any("unittest discover" in l for l in шаги), (
+        "discover не умеет запускать pytest-тесты")
+    assert "python -m pytest tests -q" in wf
+    assert "unittest tests.test_model" in wf, "ядро на голом Python не проверяется"
