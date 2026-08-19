@@ -508,7 +508,14 @@ class MushroomApp(App):
         parts = {}
 
         # --- строка места ---
+        # Ряд разделён надвое: название места отдельно, мелкие кнопки
+        # отдельно. Причина простая: на телефоне шириной 360 точек пять
+        # кнопок и сердце съедают 290, названию остаётся полсотни, и
+        # «Фрязино» вставало в столбик по одной букве — «я з и». В
+        # горизонтали, где ширины хватает, обе половины снова сходятся в
+        # одну строку (см. _arrange).
         top = BoxLayout(size_hint_y=None, height=TOUCH, spacing=dp(6))
+        tools = BoxLayout(size_hint_y=None, height=TOUCH, spacing=dp(6))
         self.btn_place = Button(text=self._place_name, font_size=sp(15), halign="left",
                                 valign="middle", background_normal="",
                                 background_color=CARD, color=INK)
@@ -520,12 +527,12 @@ class MushroomApp(App):
                        bold=True, background_normal="", background_color=CARD,
                        color=ACCENT)
         b_gps.bind(on_release=lambda *_: self.locate_me())
-        top.add_widget(b_gps)
+        tools.add_widget(b_gps)
         b_star = Button(text="Сохр.", size_hint_x=None, width=TOUCH + dp(12), font_size=sp(12),
                         bold=True, background_normal="", background_color=CARD,
                         color=ACCENT)
         b_star.bind(on_release=lambda *_: self.save_spot())
-        top.add_widget(b_star)
+        tools.add_widget(b_star)
         # Переключатель темы. Три состояния по кругу, а не отдельный экран
         # настроек: ради одной настройки экран заводить не из-за чего, а по
         # кругу человек проходит их за два касания. Подпись показывает и
@@ -536,20 +543,21 @@ class MushroomApp(App):
                               background_normal="", background_color=CARD,
                               color=MUTED)
         self.b_theme.bind(on_release=lambda *_: self.switch_theme())
-        top.add_widget(self.b_theme)
+        tools.add_widget(self.b_theme)
 
         b_help = Button(text="?", size_hint_x=None, width=TOUCH, font_size=sp(16),
                         bold=True, background_normal="", background_color=CARD,
                         color=MUTED)
         b_help.bind(on_release=lambda *_: self.show_help())
-        top.add_widget(b_help)
+        tools.add_widget(b_help)
         # Значок рисуется линиями, а не буквой: символа «♥» в шрифте Kivy на
         # Android нет, и вместо сердца на кнопке был пустой квадрат.
         b_heart = icons.IconButton(icon="heart", color=hexc(palette.RED),
                                    bg=CARD, size_hint_x=None, width=TOUCH)
         b_heart.bind(on_release=lambda *_: donate.show())
-        top.add_widget(b_heart)
+        tools.add_widget(b_heart)
         parts["top"] = top
+        parts["tools"] = tools
 
         # --- сохранённые места одной строкой ---
         # Раньше добраться до своего места можно было только через карту:
@@ -692,8 +700,8 @@ class MushroomApp(App):
         if not self._wide:
             root = BoxLayout(orientation="vertical", padding=dp(10),
                              spacing=dp(8))
-            for key in ("top", "spots", "row2", "card", "picks", "chart",
-                        "scale", "list", "status"):
+            for key in ("top", "tools", "spots", "row2", "card", "picks",
+                        "chart", "scale", "list", "status"):
                 root.add_widget(parts[key])
             return root
 
@@ -710,7 +718,15 @@ class MushroomApp(App):
         # Верхний ряд уезжает в широкую колонку. В узкой ему не хватало
         # места: шесть кнопок съедали её целиком, а название места
         # («Фрязино») ломалось в три строки по буквам.
-        for key in ("top", "card", "chart", "scale", "status"):
+        # На боку ширины хватает, и обе половины шапки снова сходятся в одну
+        # строку: лишний ряд там съедал бы высоту, которой и так мало.
+        шапка = BoxLayout(size_hint_y=None, height=TOUCH, spacing=dp(6))
+        шапка.add_widget(parts["top"])
+        шапка.add_widget(parts["tools"])
+        parts["tools"].size_hint_x = None
+        parts["tools"].width = TOUCH * 5 + dp(60)
+        left.add_widget(шапка)
+        for key in ("card", "chart", "scale", "status"):
             left.add_widget(parts[key])
         for key in ("spots", "row2", "picks", "list"):
             right.add_widget(parts[key])
@@ -754,7 +770,14 @@ class MushroomApp(App):
         new = self._build_ui()
         if old is not None and old.parent is not None:
             old.parent.remove_widget(old)
-        Window.add_widget(new)
+        # canvas="before" — главный экран всегда нижний слой.
+        #
+        # Без этого пересобранный экран добавлялся последним и рисовался
+        # ПОВЕРХ открытых окон: сменил тему, не закрыв поход, — и карта с
+        # кнопками похода просвечивает сквозь прогноз. Kivy рисует окна в
+        # порядке добавления на холст, а не по списку детей, поэтому «новое
+        # сверху» тут получается само собой.
+        Window.add_widget(new, canvas="before")
         self.root = new
         if self.res is not None:
             self.refresh()

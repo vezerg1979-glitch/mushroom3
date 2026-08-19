@@ -197,17 +197,21 @@ class WalkScreen(Popup):
                          size_hint=(None, None),
                          size=(dp(44), dp(44) * 3 + dp(12)),
                          pos_hint={"right": 0.98, "top": 0.98})
+        # Плашка кнопок поверх карты берётся из палитры, а не белая наглухо.
+        # Белая с подписью цвета текста работала, пока текст был тёмным; в
+        # ночной теме он светлый, и «+» с «−» пропали на белом совсем —
+        # кнопки остались, а нажимать было не на что.
+        panel = hexc(palette.CARD)[:3] + [0.85]
         for txt, step in (("+", 1), ("−", -1)):
             b = Button(text=txt, font_size=sp(20), bold=True,
-                       background_normal="", background_color=(1, 1, 1, 0.85),
+                       background_normal="", background_color=panel,
                        color=INK)
             b.bind(on_release=lambda _b, st=step: self.map.zoom_by(st))
             side.add_widget(b)
         # Переключатель прошлых походов стоит тут же, на карте, а не в ряду
         # кнопок внизу: его действие видно прямо под пальцем, и ряд остаётся
         # трёхкнопочным — подписи в четыре кнопки на 360 dp уже обрезаются.
-        self.b_hist = icons.IconButton(icon="journal", color=INK,
-                                       bg=(1, 1, 1, 0.85))
+        self.b_hist = icons.IconButton(icon="journal", color=INK, bg=panel)
         self.b_hist.bind(on_release=lambda *_: self.toggle_history())
         side.add_widget(self.b_hist)
         map_box.add_widget(side)
