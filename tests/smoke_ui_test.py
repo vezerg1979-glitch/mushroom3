@@ -26,6 +26,7 @@ import tempfile
 import time
 
 import pytest
+from kivy.clock import Clock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from apppath import APP  # noqa: E402
@@ -346,6 +347,70 @@ def _walk(root):
     for child in getattr(root, "children", []):
         for node in _walk(child):
             yield node
+
+
+# --------------------------------------------------------------------------- #
+#  Поворот экрана
+# --------------------------------------------------------------------------- #
+
+def test_main_screen_rebuilds_on_rotation(app):
+    """Поворот и обратно: раскладка меняется, экран остаётся живым.
+
+    Проверяется настоящая пересборка, а не расчёт по числам: части экрана
+    расставляются заново, и забытая в одной из раскладок часть пропадёт
+    именно здесь.
+    """
+    from kivy.clock import Clock
+    from kivy.core.window import Window
+
+    было = Window.size
+    try:
+        Window.size = (420, 880)
+        Clock.tick()
+        assert app._wide is False
+        части_портрет = len(list(_walk(app.root)))
+
+        Window.size = (960, 480)
+        Clock.tick()
+        assert app._wide is True, "на боку должны быть две колонки"
+        части_бока = len(list(_walk(app.root)))
+        assert abs(части_бока - части_портрет) <= 4, (
+            "при повороте потерялись или удвоились части экрана")
+
+        Window.size = (420, 880)
+        Clock.tick()
+        assert app._wide is False
+    finally:
+        Window.size = было
+        Clock.tick()
+
+
+def test_walk_screen_rebuilds_on_rotation(walk_screen):
+    """На боку карта уходит влево, кнопки — в узкую колонку справа."""
+    from kivy.clock import Clock
+    from kivy.core.window import Window
+
+    w = walk_screen
+    было = Window.size
+    try:
+        Window.size = (420, 880)
+        Clock.tick()
+        w._on_window_size()
+        assert w._wide is False
+
+        Window.size = (960, 480)
+        Clock.tick()
+        w._on_window_size()
+        assert w._wide is True
+        карта = [x for x in _walk(w.content) if type(x).__name__ == "TileMap"]
+        assert карта, "карта пропала при повороте"
+        кнопки = [b.text for b in _walk(w.content)
+                  if getattr(b, "text", "") == "Нашёл!"]
+        assert кнопки, "«Нашёл!» пропала при повороте"
+    finally:
+        Window.size = было
+        Clock.tick()
+        w._on_window_size()
 
 
 # --------------------------------------------------------------------------- #

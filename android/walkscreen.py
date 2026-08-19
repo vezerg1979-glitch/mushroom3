@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 
 from kivy.clock import Clock, mainthread
+from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
@@ -27,6 +28,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.utils import get_color_from_hex as hexc
 
+import layout
 import palette
 import theme
 
@@ -145,8 +147,8 @@ class WalkScreen(Popup):
                                            # "start" — к началу маршрута,
                                            # объект с lat/lon — к метке
 
-        root = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
-        _fill(root, CARD)
+        # Части собираются по отдельности: на боку они расставляются иначе.
+        parts = {}
 
         # счётчики
         top = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(4))
@@ -160,14 +162,14 @@ class WalkScreen(Popup):
         self.c_sun = Counter("до заката", "—")
         for c in (self.c_dist, self.c_time, self.c_finds, self.c_sun):
             top.add_widget(c)
-        root.add_widget(top)
+        parts["counters"] = top
 
         # Состояние приёма отдельной строкой. Без неё стоящий человек час
         # смотрит на «0 метров» и не понимает, сломалось приложение, сел
         # спутник или он просто никуда не идёт.
         self.gps = Label(text="", font_size=sp(11), color=MUTED,
                          size_hint_y=None, height=dp(16))
-        root.add_widget(self.gps)
+        parts["gps"] = self.gps
 
         # карта
         self.map = TileMap(lat, lon, 15)
@@ -209,10 +211,10 @@ class WalkScreen(Popup):
         self.b_hist.bind(on_release=lambda *_: self.toggle_history())
         side.add_widget(self.b_hist)
         map_box.add_widget(side)
-        root.add_widget(map_box)
+        parts["map"] = map_box
 
         self.arrow = NavArrow(size_hint_y=None, height=0)
-        root.add_widget(self.arrow)
+        parts["arrow"] = self.arrow
 
         # Подпись переносится по словам и растёт в высоту. Без text_size
         # Kivy рисует ярлык одной строкой в натуральную ширину, и длинные
@@ -224,7 +226,7 @@ class WalkScreen(Popup):
         self.hint.bind(
             width=lambda w, x: setattr(w, "text_size", (x, None)),
             texture_size=lambda w, t: setattr(w, "height", max(dp(20), t[1])))
-        root.add_widget(self.hint)
+        parts["hint"] = self.hint
 
         # кнопки
         btns = BoxLayout(size_hint_y=None, height=dp(58), spacing=dp(6))
@@ -245,7 +247,7 @@ class WalkScreen(Popup):
                                        disabled=True)
         self.b_undo.bind(on_release=lambda *_: self.undo())
         btns.add_widget(self.b_undo)
-        root.add_widget(btns)
+        parts["big"] = btns
 
         # Вспомогательные кнопки в два ряда. Пять штук в одну строку на экране
         # шириной 360 dp дают по 66 dp на кнопку — подписи не помещаются и
@@ -277,7 +279,7 @@ class WalkScreen(Popup):
         row1.add_widget(self.b_follow)
         row1.add_widget(self.b_nav)
         row1.add_widget(small("Весь поход", self.fit_walk))
-        root.add_widget(row1)
+        parts["row1"] = row1
 
         # Четыре кнопки в ряд помещаются только с подписями в две строки:
         # в одну «Машина здесь» на 85 dp обрезается до «Машина зд…», а
@@ -289,11 +291,68 @@ class WalkScreen(Popup):
         row2.add_widget(small("Машина\nздесь", self.mark_car))
         row2.add_widget(small("Приём\nи сервис", self.show_service_log, MUTED))
         row2.add_widget(small("Закрыть\nпоход", self.finish))
-        root.add_widget(row2)
+        parts["row2"] = row2
+        self._parts = parts
+        root = self._arrange()
+        Window.bind(size=self._on_window_size)
 
         super().__init__(title="Поход", content=root, size_hint=(0.98, 0.96),
                          separator_color=ACCENT, title_size=sp(15),
                          auto_dismiss=False, **kw)
+
+    def _arrange(self):
+        """Расставляет части похода: столбцом или картой слева.
+
+        На боку высоты остаётся около 300 точек, а счётчики, подсказка и
+        два ряда кнопок занимают почти столько же — карте оставалось меньше
+        сантиметра, и экран становился бесполезен как раз в том положении,
+        в котором карту и хотят рассмотреть.
+
+        Поэтому в горизонтали карта уходит влево на всю высоту, а справа
+        встаёт узкая колонка: счётчики, «Старт» и «Нашёл!», остальные
+        кнопки. «Нашёл!» при этом остаётся крупной — по ней бьют не глядя.
+        """
+        parts = self._parts
+        # Части переезжают из прежней раскладки: виджет с родителем в Kivy
+        # добавить второй раз нельзя, а при повороте они добавляются именно
+        # второй раз — в другую колонку.
+        for part in parts.values():
+            if part.parent is not None:
+                part.parent.remove_widget(part)
+        self._wide = layout.two_columns(Window.width, Window.height, dp(1))
+        if not self._wide:
+            root = BoxLayout(orientation="vertical", padding=dp(6),
+                             spacing=dp(6))
+            for key in ("counters", "gps", "map", "arrow", "hint", "big",
+                        "row1", "row2"):
+                root.add_widget(parts[key])
+            _fill(root, CARD)
+            return root
+
+        left_share, right_share = layout.split(Window.width, 0.62)
+        root = BoxLayout(padding=dp(6), spacing=dp(6))
+        left = BoxLayout(orientation="vertical", spacing=dp(4),
+                         size_hint_x=left_share)
+        right = BoxLayout(orientation="vertical", spacing=dp(6),
+                          size_hint_x=right_share)
+        for key in ("map", "arrow"):
+            left.add_widget(parts[key])
+        for key in ("counters", "gps", "big", "row1", "row2", "hint"):
+            right.add_widget(parts[key])
+        root.add_widget(left)
+        root.add_widget(right)
+        _fill(root, CARD)
+        return root
+
+    def _on_window_size(self, *_):
+        """Поворот телефона. Пересобираем только при смене раскладки.
+
+        Android присылает десятки событий размера за один поворот, и
+        пересборка на каждое — это моргание и потерянная прокрутка карты.
+        """
+        if self._wide == layout.two_columns(Window.width, Window.height, dp(1)):
+            return
+        self.content = self._arrange()
 
     def on_open(self):
         """Приёмник включается при открытии окна, а не по кнопке «Старт».

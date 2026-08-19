@@ -22,7 +22,10 @@ requirements = python3,kivy==2.3.1,certifi,openssl,plyer
 # service_ctl.py. Без этой строки класса в APK нет и сервис не стартует.
 services = Tracker:service_tracker.py:foreground
 
-orientation = portrait
+# Поворот разрешён. В лесу телефон держат стоймя, но карту похода на боку
+# видно вдвое шире, а на планшете портретная раскладка растягивает кнопки на
+# полэкрана. Экраны при повороте пересобираются в две колонки — см. layout.py.
+orientation = all
 fullscreen = 0
 
 presplash.filename = %(source.dir)s/presplash.png

@@ -64,6 +64,7 @@ import donate
 import icons
 import mushroom_forecast as engine
 import markup
+import layout
 import palette
 import theme
 import places as places_mod
@@ -488,6 +489,7 @@ class MushroomApp(App):
         self.sel = None                      # выбранный вид или None = лучший
                                              # (восстанавливается ниже из prefs)
         root = self._build_ui()
+        Window.bind(size=self._on_window_size)
         Clock.schedule_once(lambda *_: self.calculate(), 0.6)
         return root
 
@@ -500,7 +502,10 @@ class MushroomApp(App):
         (место, прогноз, выбранный вид) остаются в приложении и
         переживают пересборку.
         """
-        root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+        # Части экрана сначала собираются по отдельности, а расставляются в
+        # самом конце: в горизонтали они раскладываются иначе, а собирать их
+        # дважды означало бы две расходящиеся копии одного экрана.
+        parts = {}
 
         # --- строка места ---
         top = BoxLayout(size_hint_y=None, height=TOUCH, spacing=dp(6))
@@ -544,7 +549,7 @@ class MushroomApp(App):
                                    bg=CARD, size_hint_x=None, width=TOUCH)
         b_heart.bind(on_release=lambda *_: donate.show())
         top.add_widget(b_heart)
-        root.add_widget(top)
+        parts["top"] = top
 
         # --- сохранённые места одной строкой ---
         # Раньше добраться до своего места можно было только через карту:
@@ -558,7 +563,7 @@ class MushroomApp(App):
                                    size_hint_y=None, height=dp(36))
         self.spots_row.bind(minimum_width=self.spots_row.setter("width"))
         self.spots_sv.add_widget(self.spots_row)
-        root.add_widget(self.spots_sv)
+        parts["spots"] = self.spots_sv
 
         # --- строка параметров ---
         row2 = BoxLayout(size_hint_y=None, height=TOUCH, spacing=dp(6))
@@ -584,7 +589,7 @@ class MushroomApp(App):
                                  size_hint_x=None, width=TOUCH)
         b_log.bind(on_release=lambda *_: self.show_walk_journal())
         row2.add_widget(b_log)
-        root.add_widget(row2)
+        parts["row2"] = row2
 
         # --- вердикт ---
         # Вердикт. Высота карточки следует за текстом: строка вида
@@ -612,7 +617,7 @@ class MushroomApp(App):
         self.card.add_widget(self.l_main)
         self.card.add_widget(self.l_sub)
         self.card.add_widget(self.l_wave)
-        root.add_widget(self.card)
+        parts["card"] = self.card
 
         # --- выбор вида ---
         # Вид и тип леса восстанавливаются с прошлого запуска: человек ходит
@@ -635,7 +640,7 @@ class MushroomApp(App):
             self.sel = self.sp_kind.text
         picks.add_widget(self.sp_kind)
         picks.add_widget(self.sp_bio)
-        root.add_widget(picks)
+        parts["picks"] = picks
 
         self._reload_spots()
 
@@ -647,26 +652,82 @@ class MushroomApp(App):
         holder = Card(size_hint_y=None, height=dp(230), padding=dp(6))
         self.chart = Chart()
         holder.add_widget(self.chart)
-        root.add_widget(holder)
+        parts["chart"] = holder
         self._chart_holder = holder
-        Window.bind(size=lambda *_: self._fit_chart())
         self._fit_chart()
 
         # --- шкала индекса ---
-        root.add_widget(ScaleBar(size_hint_y=None, height=dp(34)))
+        parts["scale"] = ScaleBar(size_hint_y=None, height=dp(34))
 
         # --- список дней ---
         sv = ScrollView(do_scroll_x=False, bar_width=dp(3))
         self.list = GridLayout(cols=1, spacing=dp(6), size_hint_y=None, padding=(0, dp(2)))
         self.list.bind(minimum_height=self.list.setter("height"))
         sv.add_widget(self.list)
-        root.add_widget(sv)
+        parts["list"] = sv
 
         self.status = Label(text=f"v{engine.VERSION} · погода: Open-Meteo (CC-BY)", font_size=sp(10),
                             color=MUTED, size_hint_y=None, height=dp(18))
-        root.add_widget(self.status)
+        parts["status"] = self.status
+        return self._arrange(parts)
 
+    def _arrange(self, parts):
+        """Расставляет готовые части: столбцом или в две колонки.
+
+        В горизонтали высоты остаётся вдвое меньше, и привычный столбец
+        превращается в ленту, где виден один график, а список дней — то
+        главное, ради чего экран открывают, — уезжает за край. Поэтому
+        слева то, на что смотрят (карточка и график), справа то, что
+        нажимают, и список: под правую руку, которой держат телефон.
+
+        Узкий экран на боку (маленький телефон, 640×360) остаётся столбцом:
+        две колонки по 180 точек — это два огрызка вместо одного читаемого.
+        """
+        # То же, что в экране похода: при повороте части приходят из старой
+        # раскладки и без открепления Kivy откажется добавлять их снова.
+        for part in parts.values():
+            if part.parent is not None:
+                part.parent.remove_widget(part)
+        self._wide = layout.two_columns(Window.width, Window.height, dp(1))
+        if not self._wide:
+            root = BoxLayout(orientation="vertical", padding=dp(10),
+                             spacing=dp(8))
+            for key in ("top", "spots", "row2", "card", "picks", "chart",
+                        "scale", "list", "status"):
+                root.add_widget(parts[key])
+            return root
+
+        left_share, right_share = layout.split(Window.width)
+        root = BoxLayout(padding=dp(8), spacing=dp(8))
+        left = BoxLayout(orientation="vertical", spacing=dp(8),
+                         size_hint_x=left_share)
+        right = BoxLayout(orientation="vertical", spacing=dp(8),
+                          size_hint_x=right_share)
+        # График тянется на всю высоту своей колонки: снизу его больше не
+        # поджимают список и кнопки, и в горизонтали это единственное место,
+        # где он наконец виден целиком.
+        parts["chart"].size_hint_y = 1
+        # Верхний ряд уезжает в широкую колонку. В узкой ему не хватало
+        # места: шесть кнопок съедали её целиком, а название места
+        # («Фрязино») ломалось в три строки по буквам.
+        for key in ("top", "card", "chart", "scale", "status"):
+            left.add_widget(parts[key])
+        for key in ("spots", "row2", "picks", "list"):
+            right.add_widget(parts[key])
+        root.add_widget(left)
+        root.add_widget(right)
         return root
+
+    def _on_window_size(self, *_):
+        """Поворот экрана. Пересобираем только при смене самой раскладки.
+
+        Android присылает десятки событий размера за один поворот, и
+        пересборка на каждое — это моргание и потерянная прокрутка.
+        """
+        self._fit_chart()
+        wide = layout.two_columns(Window.width, Window.height, dp(1))
+        if wide != getattr(self, "_wide", None):
+            self._repaint()
 
     def switch_theme(self, mode=None):
         """Следующая тема по кругу и пересборка экрана.

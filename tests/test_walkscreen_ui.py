@@ -314,5 +314,8 @@ def test_zoom_buttons_do_not_steal_height_from_the_map():
     src = _src("walkscreen.py")
     assert "FloatLayout" in src
     i = src.index("map_box = FloatLayout()")
-    j = src.index("root.add_widget(map_box)")
+    # Раньше здесь искали строку root.add_widget(map_box). Части экрана
+    # теперь складываются в словарь и расставляются в конце — по-разному в
+    # портрете и на боку, — поэтому границей служит сама укладка карты.
+    j = src.index('parts["map"] = map_box')
     assert "pos_hint" in src[i:j]
