@@ -58,25 +58,15 @@ jobs:
           set -o pipefail
           buildozer --profile store android release 2>&1 | tee release.log
 
-      # Разбор лога сборки. Шаг стоит с always(), потому что нужен он именно
-      # тогда, когда сборка упала. Но always() означает и «когда сборки не
-      # было вовсе»: если раньше споткнулись тесты, шаг всё равно запускался,
-      # не находил release.log и падал сам — красным горел он, а настоящая
-      # причина уезжала вверх по журналу и терялась.
       - name: Найденные ошибки
         if: always()
         working-directory: android
         run: |
-          if [ ! -f release.log ]; then
-            echo "Лога сборки нет: до сборки дело не дошло."
-            echo "Смотрите шаг, который упал раньше этого."
-            exit 0
-          fi
           echo "===== ошибки ====="
           grep -n -i -E "error:|Command failed|What went wrong|Traceback|not a supported wheel" \
             release.log | tail -30 || true
           echo "===== хвост ====="
-          tail -n 30 release.log || true
+          tail -n 30 release.log
 
       - name: Проверка подписи
         if: steps.apk.outcome == 'success'

@@ -33,34 +33,12 @@ jobs:
           restore-keys: buildozer-
 
       - name: Сборка APK (debug)
-        id: apk
         working-directory: android
         env:
           HOME: /root
-        run: |
-          set -o pipefail
-          buildozer -v android debug 2>&1 | tee build.log
-
-      # Тот же разбор, что и в релизной сборке: без него причина падения
-      # тонет в тысячах строк вывода buildozer. Отсутствие лога здесь не
-      # ошибка, а признак, что упало раньше сборки.
-      - name: Найденные ошибки
-        if: always()
-        working-directory: android
-        run: |
-          if [ ! -f build.log ]; then
-            echo "Лога сборки нет: до сборки дело не дошло."
-            echo "Смотрите шаг, который упал раньше этого."
-            exit 0
-          fi
-          echo "===== ошибки ====="
-          grep -n -i -E "error:|Command failed|What went wrong|Traceback|not a supported wheel" \
-            build.log | tail -30 || true
-          echo "===== хвост ====="
-          tail -n 30 build.log || true
+        run: buildozer -v android debug
 
       - name: Что получилось
-        if: always()
         run: ls -la android/bin || true
 
       - uses: actions/upload-artifact@v4
