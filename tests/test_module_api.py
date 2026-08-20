@@ -450,3 +450,35 @@ def test_no_test_imports_kivy_before_the_skip():
             if граница < 0 or позиция < граница:
                 плохие.append(f"{name}:{node.lineno}")
     assert not плохие, "Kivy импортируется до пропуска: " + ", ".join(плохие)
+
+
+def test_smoke_file_is_skipped_wholesale_without_kivy():
+    """Падение на сборе прекращает весь прогон — этого нельзя допускать.
+
+    Внутри дымового файла стоит importorskip, но он срабатывает, только
+    если исполнение до него дошло. Один импорт Kivy выше по файлу — и
+    pytest не может собрать модуль, а машина без графики перестаёт
+    проверять даже то, для чего окна не нужны. Дважды так вставала
+    релизная сборка. Поэтому файл отсекается на уровень выше, в conftest.
+    """
+    import conftest
+
+    assert "smoke_ui_test.py" in conftest.NEEDS_KIVY
+    assert conftest.pytest_ignore_collect.__doc__
+
+    class Путь:
+        def __init__(self, имя):
+            self.имя = имя
+
+        def __str__(self):
+            return "/где-то/" + self.имя
+
+    было = conftest.HAS_KIVY
+    try:
+        conftest.HAS_KIVY = False
+        assert conftest.pytest_ignore_collect(Путь("smoke_ui_test.py"), None)
+        assert not conftest.pytest_ignore_collect(Путь("test_model.py"), None)
+        conftest.HAS_KIVY = True
+        assert not conftest.pytest_ignore_collect(Путь("smoke_ui_test.py"), None)
+    finally:
+        conftest.HAS_KIVY = было

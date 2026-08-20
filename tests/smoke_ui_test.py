@@ -1001,3 +1001,43 @@ def test_labels_with_user_brackets_render(walk_screen):
     lbl = Label(text=f"[b]{markup.esc('Ельник [size=x]')}[/b]", markup=True)
     lbl.texture_update()
     assert "Ельник" in lbl.text
+
+
+# --------------------------------------------------------------------------- #
+#  Утечка подписки на Window.size
+# --------------------------------------------------------------------------- #
+
+def test_walk_screen_unsubscribes_on_dismiss():
+    """Открыл поход, закрыл, открыл снова — старый обработчик не должен
+    оставаться в списке подписчиков Window.
+
+    Без отписки за сессию с несколькими походами в списке накапливается по
+    одному мёртвому обработчику на каждый закрытый экран, и каждый
+    следующий поворот телефона исполняет их все впустую.
+    """
+    from kivy.core.window import Window
+    from walkscreen import WalkScreen
+
+    # Точное число подписчиков после open() не проверяется: Kivy сам
+    # добавляет и убирает собственные временные обработчики вокруг
+    # анимации попапа, и это не наша забота. Важно только одно: после
+    # закрытия список должен вернуться к тому, что был до открытия.
+    до = len(Window.get_property_observers("size"))
+    w = WalkScreen(56.0, 38.0, "смешанный", "Тест")
+    w.open(animation=False)
+    assert len(Window.get_property_observers("size")) > до
+    w.dismiss(animation=False)
+    assert len(Window.get_property_observers("size")) == до, (
+        "обработчик остался висеть после закрытия похода")
+
+
+def test_repeated_walks_do_not_pile_up_listeners():
+    from kivy.core.window import Window
+    from walkscreen import WalkScreen
+
+    до = len(Window.get_property_observers("size"))
+    for i in range(4):
+        w = WalkScreen(56.0, 38.0, "смешанный", f"поход{i}")
+        w.open(animation=False)
+        w.dismiss(animation=False)
+    assert len(Window.get_property_observers("size")) == до
