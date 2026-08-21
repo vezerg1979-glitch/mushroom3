@@ -60,7 +60,9 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
-import donate
+import ads
+import premium
+import premium_screen
 import icons
 import mushroom_forecast as engine
 import markup
@@ -491,6 +493,10 @@ class MushroomApp(App):
         root = self._build_ui()
         Window.bind(size=self._on_window_size)
         Clock.schedule_once(lambda *_: self.calculate(), 0.6)
+        # Реклама встаёт в очередь отдельно от расчёта прогноза: ads.init()
+        # и attach() каждый оборачивают свою неудачу в try, и заминка сети
+        # для рекламы не должна отложить главный экран.
+        Clock.schedule_once(lambda *_: (ads.init(), ads.attach()), 1.2)
         return root
 
     def _build_ui(self):
@@ -550,12 +556,20 @@ class MushroomApp(App):
                         color=MUTED)
         b_help.bind(on_release=lambda *_: self.show_help())
         tools.add_widget(b_help)
-        # Значок рисуется линиями, а не буквой: символа «♥» в шрифте Kivy на
-        # Android нет, и вместо сердца на кнопке был пустой квадрат.
-        b_heart = icons.IconButton(icon="heart", color=hexc(palette.RED),
-                                   bg=CARD, size_hint_x=None, width=TOUCH)
-        b_heart.bind(on_release=lambda *_: donate.show())
-        tools.add_widget(b_heart)
+        # Кнопка есть только пока рекламу не купили: после покупки
+        # предлагать купить снова — не забота, а неуважение к тому, что
+        # человек уже сделал.
+        self.b_premium = None
+        if not premium.is_premium():
+            self.b_premium = Button(text="Без\nрекламы", size_hint_x=None,
+                                    width=TOUCH + dp(6), font_size=sp(10),
+                                    background_normal="",
+                                    background_color=CARD, color=MUTED,
+                                    halign="center")
+            self.b_premium.bind(
+                size=lambda w, v: setattr(w, "text_size", v),
+                on_release=lambda *_: self.show_premium())
+            tools.add_widget(self.b_premium)
         parts["top"] = top
         parts["tools"] = tools
 
@@ -884,6 +898,10 @@ class MushroomApp(App):
         """Режим похода: запись маршрута, метки находок, счётчик метров."""
         bio = next((b.key for b in engine.BIOTOPES.values()
                     if b.name == self.sp_bio.text), "смешанный")
+        # Реклама снимается на время похода и не спрашивается заново: в лесу
+        # ей всё равно взять нечего, а место под ней на маленьком экране
+        # нужнее карте.
+        ads.detach()
         WalkScreen(self.lat, self.lon, bio, self.btn_place.text,
                    index=self._index_today(),
                    on_close=self._walk_done).open()
@@ -907,6 +925,8 @@ class MushroomApp(App):
         return out
 
     def _walk_done(self, walk, saved):
+        # Реклама возвращается на главный экран вместе с человеком.
+        ads.attach()
         if not walk.points and not walk.finds:
             return
         counts = walk.species_counts()
@@ -1203,8 +1223,15 @@ class MushroomApp(App):
     def show_help(self):
         self._sheet("Как работает прогноз", HELP)
 
-    def show_donate(self):
-        donate.show()
+    def show_premium(self):
+        premium_screen.show(on_unlocked=self._premium_unlocked)
+
+    def _premium_unlocked(self):
+        """Кнопка «Без рекламы» исчезает из шапки сразу после покупки —
+        предлагать купить то, что уже куплено, незачем."""
+        if self.b_premium is not None and self.b_premium.parent is not None:
+            self.b_premium.parent.remove_widget(self.b_premium)
+            self.b_premium = None
 
     def show_day(self, i):
         r = self.res
