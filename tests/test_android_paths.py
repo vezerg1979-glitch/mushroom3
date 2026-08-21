@@ -37,7 +37,7 @@ def android(monkeypatch, tmp_path):
     monkeypatch.delenv("MUSHROOM_DATA_DIR", raising=False)
     saved = androidfake.install()
     mods = {}
-    for name in ("backup", "notify", "survival"):
+    for name in ("backup", "notify", "survival", "ads", "billing"):
         mods[name] = importlib.reload(importlib.import_module(name))
     try:
         yield mods
@@ -190,7 +190,20 @@ def test_track_export_reaches_the_share_sheet(android, tmp_path, monkeypatch):
     по которому файл не достать ничем: кнопка формально работала, а по сути
     нет. Проверяется весь путь: GPX собран, положен в «Загрузки», передан
     системе.
+
+    Пропускается без Kivy: walkjournal.py — настоящий экран, в отличие от
+    backup.py/notify.py/survival.py он не оборачивает импорт Kivy в try —
+    и правильно, это не android-обвязка, а виджеты. android/, откуда взят
+    остальной этот файл, до Kivy добраться не требует; этот один тест —
+    требует, и без него на машине без Kivy падал сбор всего файла целиком.
+
+    Пропуск по одному только import kivy недостаточен: в контейнере
+    kivy/buildozer, где собирается релиз, сам пакет kivy стоит, а вот
+    графический бэкенд (SDL2/GL) в headless-окружении — нет. import kivy
+    там проходит, а kivy.graphics, который и использует walkjournal.py,
+    уже падает. Поэтому пропускаем по нему, а не по верхнему пакету.
     """
+    pytest.importorskip("kivy.graphics")
     import importlib
 
     import track
@@ -221,3 +234,110 @@ def test_track_export_reaches_the_share_sheet(android, tmp_path, monkeypatch):
     assert calls["publish"][1] == walkjournal.GPX_MIME
     assert calls["share"]["mime"] == walkjournal.GPX_MIME
     assert "Загрузк" in card.status.text
+
+
+# --------------------------------------------------------------------------- #
+#  Реклама
+# --------------------------------------------------------------------------- #
+
+def test_banner_attaches_when_free(android, monkeypatch):
+    """Обычный ход: телефон, реклама не куплена — баннер встаёт на место."""
+    ads = android["ads"]
+    monkeypatch.setattr(ads.premium, "is_premium", lambda: False)
+    assert ads.init() is True
+    assert ads.attach() is True
+    assert ads.last_error == ""
+
+
+def test_banner_does_not_attach_after_purchase(android, monkeypatch):
+    """Правило «купил — рекламы нет» проверяется тем же кодом, что решает,
+    показывать баннер или нет: не отдельной галочкой в интерфейсе."""
+    ads = android["ads"]
+    monkeypatch.setattr(ads.premium, "is_premium", lambda: True)
+    assert ads.should_show() is False
+    assert ads.attach() is False
+
+
+def test_detach_after_never_attaching_is_harmless():
+    """Снять баннер, которого не было (например, купили ДО первого показа),
+    не должно падать."""
+    import ads
+
+    ads.detach()             # не должно бросить исключение
+
+
+def test_ad_failure_is_recorded_not_raised(android, monkeypatch):
+    """Сеть, старая прошивка без нужного класса, что угодно — сбой рекламы
+    не должен быть виден нигде, кроме last_error. Та же идея, что у
+    notify.py: молчаливый except, который забывает след, однажды уже стоил
+    сезона уведомлений."""
+    import androidfake
+
+    ads = android["ads"]
+    monkeypatch.setattr(ads.premium, "is_premium", lambda: False)
+
+    настоящий_autoclass = androidfake.autoclass
+
+    def падает(name):
+        if "BannerAdView" in name:
+            raise RuntimeError("нет такого класса в этой версии SDK")
+        return настоящий_autoclass(name)
+
+    import jnius
+    monkeypatch.setattr(jnius, "autoclass", падает)
+    assert ads.attach() is False
+    assert "нет такого класса" in ads.last_error
+
+
+def test_init_failure_is_recorded_not_raised(android, monkeypatch):
+    """То же самое, что для attach(), но для init(): не так очевидно, что
+    оба места ловят исключение по отдельности, — тест на attach() уже
+    однажды не заметил дыру в init(), пока не появился этот."""
+    import androidfake
+
+    ads = android["ads"]
+    monkeypatch.setattr(ads.premium, "is_premium", lambda: False)
+    настоящий_autoclass = androidfake.autoclass
+
+    def падает(name):
+        if "MobileAds" in name:
+            raise RuntimeError("SDK не проинициализирован")
+        return настоящий_autoclass(name)
+
+    import jnius
+    monkeypatch.setattr(jnius, "autoclass", падает)
+    assert ads.init() is False
+    assert "SDK не проинициализирован" in ads.last_error
+
+
+def test_ads_never_touched_from_the_walk_screen():
+    """Экран похода не должен даже импортировать ads — реклама там не
+    нужна физически, а не просто выключена условием."""
+    with open(os.path.join(APP, "walkscreen.py"), encoding="utf-8") as f:
+        src = f.read()
+    assert "import ads" not in src
+
+
+# --------------------------------------------------------------------------- #
+#  Покупка через RuStore
+# --------------------------------------------------------------------------- #
+
+def test_billing_is_honestly_unavailable_for_now(android):
+    """До настоящей интеграции модуль обязан говорить «недоступно», а не
+    делать вид, что покупка проходит."""
+    billing = android["billing"]
+    assert billing.is_available() is False
+
+
+def test_purchase_does_not_pretend_to_work(android):
+    billing = android["billing"]
+    итог = []
+    assert billing.purchase(lambda ok, err: итог.append((ok, err))) is False
+    assert итог == [(False, billing.last_error)]
+
+
+def test_restore_does_not_pretend_to_work(android):
+    billing = android["billing"]
+    итог = []
+    assert billing.restore(lambda ok, err: итог.append((ok, err))) is False
+    assert итог and итог[0][0] is False
