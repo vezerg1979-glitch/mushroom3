@@ -184,9 +184,15 @@ def test_no_glyphs_the_bundled_font_lacks(name):
     assert not bad, f"нет в шрифте: {bad[:4]}"
 
 
-def test_icon_button_is_used_for_donate_and_journal():
-    """Кнопки доната и журнала должны брать значок из icons.py."""
+def test_icon_button_is_used_for_journal():
+    """Кнопка журнала должна брать значок из icons.py.
+
+    Раньше здесь же проверялась кнопка доната («heart»); её на главном
+    экране заменила кнопка «Без рекламы» — текстовая, без значка, — когда
+    донат уступил место покупке без рекламы. Значок сердца остался в
+    icons.py как таковой (может пригодиться), просто на кнопку больше не
+    навешан.
+    """
     with open(os.path.join(ROOT, "main.py"), encoding="utf-8") as f:
         src = f.read()
-    assert re.search(r'IconButton\(icon="heart"', src)
     assert re.search(r'IconButton\(icon="journal"', src)
