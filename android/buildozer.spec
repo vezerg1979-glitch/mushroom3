@@ -28,12 +28,19 @@ requirements = python3,kivy==2.3.1,certifi,openssl,plyer
 # (BannerAdView, BannerAdSize, AdRequest, MobileAds) писан под старый
 # API. Переход на 8.x — это правка ads.py под новые имена классов и
 # отдельная проверка на телефоне, а не смена одной цифры в этой строке.
-# myTarget такого разлома пока не переживал, версия свежая на момент
-# написания.
-# СВЕРИТЬ перед сборкой, если после этой правки прошло много времени:
-#   Яндекс: https://ads.yandex.com/helpcenter/en/dev/android/changelog-android
-#   myTarget: https://mvnrepository.com/artifact/com.my.target/mytarget-sdk
-android.gradle_dependencies = com.yandex.android:mobileads:7.16.0, com.my.target:mytarget-sdk:5.47.1
+#
+# myTarget версия ЗАФИКСИРОВАНА на 5.20.1 ПО ТОЙ ЖЕ ПРИЧИНЕ, что и
+# android.api ниже держится на 33, а не на 34: начиная с 5.21.0
+# (03.06.2024) myTarget перешёл с com.google.android.exoplayer на
+# androidx.media3, а тот требует compileSdk >= 34 — Gradle прямо
+# отказывается собирать со всеми зависимостями android.media3, если
+# compileSdk ниже. Поднять android.api до 34 сейчас нельзя — сломается
+# ForegroundServiceType у сервиса записи похода (см. комментарий у
+# android.api ниже, это уже стоило одного сломанного релиза). 5.20.1 —
+# последняя версия myTarget перед этим переходом, ещё на старом
+# ExoPlayer, без требования compileSdk 34. Проверено по официальному
+# changelog: https://target.vk.ru/help/partners/mob/androidhistory/en
+android.gradle_dependencies = com.yandex.android:mobileads:7.16.0, com.my.target:mytarget-sdk:5.20.1
 
 # AndroidX обязателен при таких gradle-зависимостях — без него сборка с
 # androidx-пакетами внутри SDK не соберётся.
@@ -81,7 +88,9 @@ android.permissions = android.permission.INTERNET,android.permission.ACCESS_NETW
 #   ndk_api = 24   — при 21 у r25b не хватает заголовков, обрыв на этапе create
 #   api = 33       — на 34 (Android 14) системе нужен foregroundServiceType
 #                    в манифесте, а p4a 2024.01.21 его не выставляет: сервис
-#                    стартует и тут же убивается
+#                    стартует и тут же убивается. Из-за этого же versionов
+#                    myTarget SDK зафиксирован на 5.20.1 выше — свежее
+#                    требует compileSdk 34, поднять которое сейчас нельзя.
 #   одна архитектура — телефоны новее 2015 года все 64-битные, сборка вдвое быстрее
 android.api = 33
 android.minapi = 24
@@ -113,7 +122,3 @@ warn_on_root = 0
 # окружения P4A_RELEASE_* — см. .github/workflows/build-release.yml
 android.release_artifact = apk
 
-# Магазины требуют свежий targetSdk. Прежде чем поднимать до 34, читайте
-# примечание про foregroundServiceType в docs/rustore.md: на 34 фоновому
-# сервису нужен атрибут, который p4a 2024.01.21 не выставляет.
-android.api = 33
