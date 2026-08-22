@@ -37,7 +37,8 @@ def android(monkeypatch, tmp_path):
     monkeypatch.delenv("MUSHROOM_DATA_DIR", raising=False)
     saved = androidfake.install()
     mods = {}
-    for name in ("backup", "notify", "survival", "ads", "billing"):
+    for name in ("backup", "notify", "survival", "ads", "billing",
+                "interstitial"):
         mods[name] = importlib.reload(importlib.import_module(name))
     try:
         yield mods
@@ -316,6 +317,66 @@ def test_ads_never_touched_from_the_walk_screen():
     with open(os.path.join(APP, "walkscreen.py"), encoding="utf-8") as f:
         src = f.read()
     assert "import ads" not in src
+
+
+# --------------------------------------------------------------------------- #
+#  Полноэкранная реклама (interstitial)
+# --------------------------------------------------------------------------- #
+
+def test_interstitial_shows_once_when_free(android, monkeypatch):
+    """Обычный ход: телефон, реклама не куплена, ещё не показывали за этот
+    запуск — попытка показа начинается."""
+    interstitial = android["interstitial"]
+    monkeypatch.setattr(interstitial.premium, "is_premium", lambda: False)
+    assert interstitial.show_once() is True
+    assert interstitial.last_error == ""
+
+
+def test_interstitial_skipped_after_purchase(android, monkeypatch):
+    """Та же проверка «купил — рекламы нет», что у баннера — тем же
+    premium.is_premium(), а не отдельной галочкой для второй рекламной сети."""
+    interstitial = android["interstitial"]
+    monkeypatch.setattr(interstitial.premium, "is_premium", lambda: True)
+    assert interstitial.should_show() is False
+    assert interstitial.show_once() is False
+
+
+def test_interstitial_shown_once_per_run(android, monkeypatch):
+    """Второй вызов за тот же запуск не должен начинать вторую загрузку —
+    полноэкранная реклама навязчивее баннера, дважды за сессию не нужна."""
+    interstitial = android["interstitial"]
+    monkeypatch.setattr(interstitial.premium, "is_premium", lambda: False)
+    assert interstitial.show_once() is True
+    assert interstitial.show_once() is False
+
+
+def test_interstitial_failure_is_recorded_not_raised(android, monkeypatch):
+    """Сбой SDK не должен быть виден нигде, кроме last_error — та же идея,
+    что и для баннера в ads.py."""
+    import androidfake
+
+    interstitial = android["interstitial"]
+    monkeypatch.setattr(interstitial.premium, "is_premium", lambda: False)
+
+    настоящий_autoclass = androidfake.autoclass
+
+    def падает(name):
+        if "InterstitialAd" in name:
+            raise RuntimeError("нет такого класса в этой версии SDK")
+        return настоящий_autoclass(name)
+
+    import jnius
+    monkeypatch.setattr(jnius, "autoclass", падает)
+    assert interstitial.show_once() is False
+    assert "нет такого класса" in interstitial.last_error
+
+
+def test_interstitial_never_touched_from_the_walk_screen():
+    """Экран похода не должен импортировать interstitial — по той же
+    причине, что и ads: реклама там не нужна физически."""
+    with open(os.path.join(APP, "walkscreen.py"), encoding="utf-8") as f:
+        src = f.read()
+    assert "import interstitial" not in src
 
 
 # --------------------------------------------------------------------------- #
