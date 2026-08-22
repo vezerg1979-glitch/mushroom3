@@ -96,7 +96,7 @@ android.accept_sdk_license = True
 
 # Подробность 1, а не 2: диагностика берётся grep-ом по build.log в workflow,
 # а полный дамп на гигабайты только замедляет сборку
-log_level = 1
+log_level = 2
 warn_on_root = 0
 
 
