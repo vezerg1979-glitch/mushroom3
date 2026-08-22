@@ -7,7 +7,7 @@ package.domain = ru.grezev
 source.dir = .
 source.include_exts = py,png,jpg,ttf,json
 
-version = 3.4
+version = 3.5
 
 # Ветку p4a обязательно держать закреплённой: на develop собирается
 # Python 3.14, под который не подходят колёса, и сборка обрывается
@@ -16,6 +16,29 @@ p4a.branch = v2024.01.21
 # urllib3 убран намеренно — код им не пользуется, сеть идёт через
 # stdlib urllib.request. plyer нужен для GPS (кнопка «Определить место»)
 requirements = python3,kivy==2.3.1,certifi,openssl,plyer
+
+# Нативные Java-SDK рекламных сетей — не pip-пакеты, requirements их не
+# берёт. Без этой строки ads.py (Яндекс) и interstitial.py (myTarget)
+# честно ловят ClassNotFoundException и молча остаются без рекламы: код
+# работает правильно, просто самого SDK физически нет в APK.
+#
+# Яндекс версия ЗАФИКСИРОВАНА на 7.16.0 нарочно, не «последняя из
+# коробки»: в SDK 8.0.0 (апрель 2026) — ломающие изменения, MobileAds
+# переименован в YandexAds и часть классов вместе с ним. Код в ads.py
+# (BannerAdView, BannerAdSize, AdRequest, MobileAds) писан под старый
+# API. Переход на 8.x — это правка ads.py под новые имена классов и
+# отдельная проверка на телефоне, а не смена одной цифры в этой строке.
+# myTarget такого разлома пока не переживал, версия свежая на момент
+# написания.
+# СВЕРИТЬ перед сборкой, если после этой правки прошло много времени:
+#   Яндекс: https://ads.yandex.com/helpcenter/en/dev/android/changelog-android
+#   myTarget: https://mvnrepository.com/artifact/com.my.target/mytarget-sdk
+android.gradle_dependencies = com.yandex.android:mobileads:7.16.0, com.my.target:mytarget-sdk:5.47.1
+
+# AndroidX обязателен при таких gradle-зависимостях — без него сборка с
+# androidx-пакетами внутри SDK не соберётся.
+android.enable_androidx = True
+
 
 # Фоновая запись трека. Имя до двоеточия задаёт Java-класс:
 # Tracker -> ru.grezev.mushroomforecast.ServiceTracker, именно его ищет
@@ -38,7 +61,7 @@ android.presplash_color = #171A1F
 
 # Числовой код версии. Магазин требует, чтобы он рос с каждой загрузкой,
 # иначе новая сборка не принимается. Формат: 2.7 -> 20700, 2.7.1 -> 20701.
-android.numeric_version = 30400
+android.numeric_version = 30500
 
 # POST_NOTIFICATIONS добавлено для Android 13+: без него уведомление
 # переднего плана не показывается, и сервис выглядит «мёртвым».
