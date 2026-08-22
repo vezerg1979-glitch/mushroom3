@@ -60,7 +60,6 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
-import ads
 import interstitial
 import premium
 import premium_screen
@@ -528,14 +527,16 @@ class MushroomApp(App):
         root = self._build_ui()
         Window.bind(size=self._on_window_size)
         Clock.schedule_once(lambda *_: self.calculate(), 0.6)
-        # Реклама встаёт в очередь отдельно от расчёта прогноза: ads.init()
-        # и attach() каждый оборачивают свою неудачу в try, и заминка сети
-        # для рекламы не должна отложить главный экран.
-        Clock.schedule_once(lambda *_: (ads.init(), ads.attach()), 1.2)
-        # Полноэкранная реклама myTarget — отдельно от баннера, тоже не
-        # должна задержать готовность экрана. show_once() сам решает,
-        # показывать ли (не куплено «Без рекламы», ещё не показывали за
-        # этот запуск, есть Android) — здесь просто зовём и не ждём ответа.
+        # Реклама Яндекса (баннер) отключена начиная с 3.5 — её тянет
+        # SDK, чьи зависимости плавают по диапазону версий (appmetrica,
+        # div) и на определённый момент требуют compileSdk 34, а поднять
+        # его сейчас нельзя без слома фонового сервиса записи похода (см.
+        # buildozer.spec). Оставлена только полноэкранная реклама
+        # myTarget — она закреплена версией без таких сюрпризов.
+        # Полноэкранная реклама myTarget — не должна задержать готовность
+        # экрана. show_once() сам решает, показывать ли (не куплено «Без
+        # рекламы», ещё не показывали за этот запуск, есть Android) —
+        # здесь просто зовём и не ждём ответа.
         Clock.schedule_once(lambda *_: interstitial.show_once(), 1.4)
         return root
 
@@ -941,10 +942,9 @@ class MushroomApp(App):
         """Режим похода: запись маршрута, метки находок, счётчик метров."""
         bio = next((b.key for b in engine.BIOTOPES.values()
                     if b.name == self.sp_bio.text), "смешанный")
-        # Реклама снимается на время похода и не спрашивается заново: в лесу
-        # ей всё равно взять нечего, а место под ней на маленьком экране
-        # нужнее карте.
-        ads.detach()
+        # Полноэкранная реклама (myTarget) показывается только один раз
+        # при запуске — в поход она уже не полезет заново, это не баннер,
+        # который надо было бы снимать/возвращать.
         WalkScreen(self.lat, self.lon, bio, self.btn_place.text,
                    index=self._index_today(),
                    on_close=self._walk_done).open()
@@ -968,8 +968,6 @@ class MushroomApp(App):
         return out
 
     def _walk_done(self, walk, saved):
-        # Реклама возвращается на главный экран вместе с человеком.
-        ads.attach()
         if not walk.points and not walk.finds:
             return
         counts = walk.species_counts()

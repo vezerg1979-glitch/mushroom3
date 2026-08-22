@@ -30,7 +30,6 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.utils import get_color_from_hex as hexc
 
-import ads
 import billing
 import buzz
 import donate
@@ -217,7 +216,9 @@ class PremiumScreen(Popup):
             self.status.text = f"Не получилось: {error}" if error else "Не получилось."
 
     def _unlocked(self):
-        ads.detach()
+        # Баннер Яндекса отключён с 3.5 (см. main.py) — снимать нечего,
+        # полноэкранная myTarget и так проверяет premium.is_premium()
+        # сама, без явного вызова отсюда.
         buzz.tap()
         self.status.text = "Готово — реклама выключена."
         if self.on_unlocked:
