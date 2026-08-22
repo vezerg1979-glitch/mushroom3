@@ -61,6 +61,7 @@ from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
 import ads
+import interstitial
 import premium
 import premium_screen
 import icons
@@ -498,6 +499,11 @@ class MushroomApp(App):
         # и attach() каждый оборачивают свою неудачу в try, и заминка сети
         # для рекламы не должна отложить главный экран.
         Clock.schedule_once(lambda *_: (ads.init(), ads.attach()), 1.2)
+        # Полноэкранная реклама myTarget — отдельно от баннера, тоже не
+        # должна задержать готовность экрана. show_once() сам решает,
+        # показывать ли (не куплено «Без рекламы», ещё не показывали за
+        # этот запуск, есть Android) — здесь просто зовём и не ждём ответа.
+        Clock.schedule_once(lambda *_: interstitial.show_once(), 1.4)
         return root
 
     def _build_ui(self):
