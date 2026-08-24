@@ -984,6 +984,57 @@ def test_place_picker_opens(app):
     p.dismiss()
 
 
+def test_tilemap_reset_touches_clears_stuck_drag():
+    """Ровно тот баг из леса: экран гаснет посреди перетаскивания карты,
+    on_touch_up никогда не приходит, self._touches остаётся с чужим
+    touch.uid внутри навсегда — следующий одиночный тап ошибочно считается
+    вторым пальцем пинч-зума, потому что len(self._touches) внезапно 2.
+
+    reset_touches() — то, что вызывает MushroomApp.on_resume() при
+    возврате из фона (см. main.py). Без него это ровно то, из-за чего
+    «+», «−» и «Закрыть поход» продолжали не отвечать даже после первого
+    фикса версии 3.4: тот чистил только общий EventLoop.touches, а свой,
+    отдельный self._touches у TileMap не трогал.
+    """
+    from mapview import TileMap
+
+    tm = TileMap(56.0, 38.0)
+    tm.size = (300, 300)
+    tm.pos = (0, 0)
+
+    class Замерший:
+        uid = 999
+        pos = (10, 10)
+
+    # Кладём «зависшее» касание напрямую — без on_touch_down, потому что
+    # именно так оно там и оказывается: on_touch_up для него никогда не
+    # придёт, а значит и .pop() внутри него тоже не случится.
+    tm._touches[Замерший.uid] = Замерший.pos
+    tm._pinch = 42.0
+    tm._moved = True
+    assert len(tm._touches) == 1
+
+    tm.reset_touches()
+
+    assert tm._touches == {}
+    assert tm._pinch is None
+    assert tm._moved is False
+
+
+def test_tilemap_reset_all_touches_reaches_live_instances():
+    """MushroomApp.on_resume() не хранит ссылку на текущую карту похода
+    напрямую — он не обязан знать, жив ли сейчас WalkScreen. reset_all_
+    touches() находит все живые TileMap сам, через слабые ссылки."""
+    from mapview import TileMap
+
+    tm = TileMap(56.0, 38.0)
+    tm._touches[123] = (5, 5)
+
+    TileMap.reset_all_touches()
+
+    assert tm._touches == {}
+
+
 def test_walk_journal_opens(app):
     app.show_walk_journal()
 
