@@ -13,6 +13,7 @@ import math
 import os
 import ssl
 import threading
+import weakref
 import traceback
 from datetime import datetime
 
@@ -69,6 +70,7 @@ import markup
 import layout
 import palette
 import theme
+import mapview
 import uikit
 import places as places_mod
 import prefs
@@ -489,21 +491,37 @@ class MushroomApp(App):
         касания (палец ещё не оторван от кнопки — обычное дело, когда
         достаёшь телефон в лесу и не глядя тычешь в «Закрыть поход»),
         Android не успевает доставить Kivy событие «отпустили»: activity
-        уже приостановлена. Это касание остаётся в EventLoop.touches
-        навсегда — и в отчётах ровно это: «+», «−», «Закрыть поход»
-        перестают отвечать после возврата из фона, а не ломаются сами по
-        себе. Известная особенность Kivy на Android, не баг конкретно
-        этого экрана.
+        уже приостановлена. Это касание остаётся зависшим — и в отчётах
+        ровно это: «+», «−», «Закрыть поход» перестают отвечать после
+        возврата из фона, а не ломаются сами по себе. Известная
+        особенность Kivy на Android, не баг конкретно этого экрана.
 
-        EventLoop.touches.clear() — стандартный обходной путь: список
-        активных касаний обнуляется, новые тапы начинают жить с чистого
-        листа вместо конфликта с призрачным старым. Формального теста на
-        это нет и не может быть без реального телефона и реального
-        сворачивания посреди тапа — как и остальной код, завязанный на
-        поведение Android, а не на чистую логику.
+        Версия 3.4 чистила только EventLoop.touches — общий список
+        активных касаний Kivy. Этого хватает не всегда: то, что забрал
+        touch.grab(widget), не обязано ссылаться на EventLoop.touches, а
+        свой собственный учёт захвата виджет чистит сам, штатно, только
+        внутри on_touch_up() — который для зависшего касания как раз и
+        не был вызван. TileMap (карта похода) — ровно такой случай: у
+        неё свой self._touches для перетаскивания и пинч-зума, не
+        совпадающий с EventLoop.touches, — см. mapview.reset_touches().
+        Отчёт «+/−/Закрыть поход не отвечают после версии с первым
+        фиксом» — это TileMap.reset_all_touches() ниже.
+
+        Формального теста на это нет и не может быть без реального
+        телефона и реального сворачивания посреди тапа — как и остальной
+        код, завязанный на поведение Android, а не на чистую логику.
         """
         from kivy.base import EventLoop
+        for touch in list(EventLoop.touches):
+            for widget in list(touch.grab_list):
+                w = widget() if isinstance(widget, weakref.ref) else widget
+                if w is not None:
+                    try:
+                        touch.ungrab(w)
+                    except Exception:                              # noqa: BLE001
+                        pass
         EventLoop.touches.clear()
+        mapview.TileMap.reset_all_touches()
 
     def build(self):
         try:

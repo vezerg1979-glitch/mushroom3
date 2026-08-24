@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import weakref
 
 from kivy.clock import mainthread
 from kivy.core.image import Image as CoreImage
@@ -97,8 +98,15 @@ def num2deg(x: float, y: float, z: int) -> tuple[float, float]:
 class TileMap(Widget):
     """Панорамируемая карта. Перетаскивание — сдвиг, касание — метка."""
 
+    # Живые экземпляры — не для перебора карт, а для одной задачи:
+    # сбросить «застрявшее» перетаскивание при возврате из фона (см.
+    # _live и reset_all_touches ниже). WeakSet — чтобы не мешать сборке
+    # мусора, когда экран похода закрывается и карта уничтожается.
+    _live: "weakref.WeakSet[TileMap]" = weakref.WeakSet()
+
     def __init__(self, lat=55.9606, lon=38.0456, zoom=11, on_pick=None, **kw):
         super().__init__(**kw)
+        TileMap._live.add(self)
         self.zoom = zoom
         self.cx, self.cy = deg2num(lat, lon, zoom)
         self.marker = (lat, lon)
@@ -297,6 +305,30 @@ class TileMap(Widget):
                     return True
                 self.set_marker(*self._latlon(*touch.pos))
         return True
+
+    def reset_touches(self):
+        """Сбрасывает своё перетаскивание/пинч-зум — не через on_touch_up.
+
+        Если экран гаснет прямо во время перетаскивания карты, Android не
+        успевает доставить событие «отпустили»: touch.ungrab(self) в
+        on_touch_up() выше просто никогда не вызывается, а self._touches
+        остаётся с чужим, неактуальным touch.uid внутри навсегда. Дальше
+        любое новое одиночное касание карты добавляется к этому старому
+        значению — len(self._touches) неожиданно оказывается 2, код выше
+        принимает обычный тап за пинч-зум, и вся карта, а с ней и то, что
+        рядом с ней в вёрстке, перестаёт откликаться на тапы нормально.
+        Вызывается из MushroomApp.on_resume() при возврате из фона — см.
+        main.py.
+        """
+        self._touches.clear()
+        self._pinch = None
+        self._moved = False
+
+    @classmethod
+    def reset_all_touches(cls):
+        """reset_touches() для каждой живой карты — обычно она одна."""
+        for tm in list(cls._live):
+            tm.reset_touches()
 
     # --- отрисовка ----------------------------------------------------------
     def set_heading(self, deg):
