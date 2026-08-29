@@ -984,6 +984,316 @@ def test_place_picker_opens(app):
     p.dismiss()
 
 
+# --------------------------------------------------------------------------- #
+#  Сетка индекса на карте («Раскрасить»)
+# --------------------------------------------------------------------------- #
+
+def _fake_daily(engine, t=18.0, precip=1.0):
+    from datetime import date, timedelta
+
+    n = engine.PAST_DAYS + 7
+    times = [(date.today() - timedelta(days=engine.PAST_DAYS) + timedelta(days=i)).isoformat()
+             for i in range(n)]
+    return {"daily": {"time": times,
+                      "temperature_2m_max": [t] * n, "temperature_2m_min": [t - 8] * n,
+                      "temperature_2m_mean": [t - 4] * n, "precipitation_sum": [precip] * n,
+                      "et0_fao_evapotranspiration": [3.0] * n,
+                      "relative_humidity_2m_mean": [80.0] * n}}
+
+
+def test_visible_bounds_are_sane_and_south_of_north():
+    """Обратная проекция экрана в координаты — юг меньше севера, запад
+    меньше востока, что бы ни было выбрано зумом и положением."""
+    import mapview
+
+    m = mapview.TileMap(55.96, 38.04, zoom=10)
+    m.size = (400, 700)
+    m.pos = (0, 0)
+    south, west, north, east = m.visible_bounds()
+    assert south < north
+    assert west < east
+    assert 50 < south < north < 60          # разумные широты для Подмосковья
+
+
+def test_place_picker_heat_button_runs_the_whole_path(monkeypatch):
+    """Кнопка «Раскрасить» от нажатия до готовой сетки на карте: сеть
+    подменена, но путь — тот же, что в бою, включая фоновый поток и
+    честный прогресс.
+    """
+    import time as _time
+
+    import mushroom_forecast as engine
+    from mapview import PlacePicker
+
+    def fake(url, params, timeout=25):
+        if "," in str(params.get("latitude", "")):
+            raise RuntimeError("резервный путь — нарочно, чтобы проверить и его")
+        return _fake_daily(engine)
+
+    monkeypatch.setattr(engine, "_get_json", fake)
+
+    pop = PlacePicker(55.96, 38.04, lambda *a: None)
+    pop.open(animation=False)
+    try:
+        assert pop.map.heat is None
+        pop._start_heat()
+        assert pop.b_heat.disabled is True, "кнопка должна блокироваться на время расчёта"
+
+        from kivy.clock import Clock
+        предел = _time.time() + 10
+        while pop.map.heat is None and _time.time() < предел:
+            Clock.tick()
+            _time.sleep(0.02)
+
+        assert pop.map.heat is not None, "сетка не появилась за разумное время"
+        assert pop.b_heat.disabled is False, "кнопка должна разблокироваться по готовности"
+        assert pop.map.heat.done == pop.map.heat.total
+        assert all(c.index is not None for c in pop.map.heat.cells)
+        assert "Раскрашено" in pop.heat_status.text
+    finally:
+        pop.dismiss()
+
+
+def test_heat_overlay_paints_visibly_different_colours_for_different_index(monkeypatch):
+    """Разные значения индекса должны давать разные, а не сливающиеся
+    цвета клеток — иначе карта выглядит раскрашенной, а на деле нет.
+
+    Раньше это чуть не осталось незамеченным: тест на равномерных
+    синтетических данных (одна и та же погода в каждой клетке) давал
+    почти одинаковый средний индекс всюду, и клетки сливались с фоном
+    карты — не из-за ошибки в отрисовке, а потому что и красить было
+    почти нечем. Здесь индексы нарочно разного порядка величины.
+    """
+    import palette
+
+    низкий = palette.level_colors(2.0)[0]
+    средний = palette.level_colors(40.0)[0]
+    высокий = palette.level_colors(85.0)[0]
+    contrast = palette.contrast(низкий, высокий)
+    assert contrast > 1.5, "шкала должна различаться на глаз от края до края"
+    assert низкий != средний != высокий
+
+
+def test_heat_layer_is_skipped_when_nothing_computed_yet():
+    """Пустая карта не должна пытаться рисовать сетку, которой ещё нет."""
+    import mapview
+
+    m = mapview.TileMap(55.96, 38.04, zoom=10)
+    m.size = (400, 500)
+    m.pos = (0, 0)
+    assert m.heat is None
+    m.redraw()                     # не должно бросить исключение
+
+
+def test_redraw_actually_invokes_the_heat_painter(monkeypatch):
+    """Данные сетки могут быть готовы, а сама отрисовка — незамеченно
+    отключена: test_place_picker_heat_button_runs_the_whole_path проверяет
+    только то, что grid посчитан, а не то, что redraw() его нарисовал.
+    Здесь проверяется именно вызов — счётчиком, а не глазами.
+    """
+    import heatgrid
+    import mapview
+
+    m = mapview.TileMap(55.96, 38.04, zoom=10)
+    m.size = (400, 500)
+    m.pos = (0, 0)
+    m.heat = heatgrid.plan(*m.visible_bounds())
+    for c in m.heat.cells:
+        c.index = 42.0
+
+    вызовов = []
+    monkeypatch.setattr(m, "_draw_heat", lambda: вызовов.append(1))
+    m.redraw()
+    assert вызовов, "_draw_heat не был вызван из redraw() при заполненной сетке"
+
+
+def test_heat_button_recovers_after_a_total_failure(monkeypatch):
+    """Сеть недоступна целиком — кнопка не должна остаться заблокированной
+    навсегда, а сообщение должно объяснять, что случилось."""
+    import time as _time
+
+    import mushroom_forecast as engine
+    from mapview import PlacePicker
+
+    def всегда_рвётся(url, params, timeout=25):
+        raise TimeoutError("сети нет вовсе")
+
+    monkeypatch.setattr(engine, "_get_json", всегда_рвётся)
+
+    pop = PlacePicker(55.96, 38.04, lambda *a: None)
+    pop.open(animation=False)
+    try:
+        pop._start_heat()
+        from kivy.clock import Clock
+        предел = _time.time() + 10
+        while pop.b_heat.disabled and _time.time() < предел:
+            Clock.tick()
+            _time.sleep(0.02)
+        assert pop.b_heat.disabled is False
+        assert "Не получилось" in pop.heat_status.text
+    finally:
+        pop.dismiss()
+
+
+# --------------------------------------------------------------------------- #
+#  Раскраска карты по погоде
+# --------------------------------------------------------------------------- #
+
+def _wait_for(condition, timeout_s=5.0):
+    """Ждёт условие, продвигая часы Kivy — расчёт идёт в фоновом потоке,
+    а mainthread-колбэки исполняются только когда есть кому их прогнать."""
+    import time as _time
+    from kivy.clock import Clock
+
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        Clock.tick()
+        if condition():
+            return True
+        _time.sleep(0.02)
+    return False
+
+
+def test_heat_button_colours_the_map(app, monkeypatch):
+    """Нажал «Раскрасить» — сетка посчиталась и легла на карту как self.heat."""
+    import heatfetch
+    from mapview import PlacePicker
+
+    def fake_fetch(grid, forecast_days=7, on_progress=None):
+        for i, cell in enumerate(grid.cells):
+            cell.index = 40.0 + i
+            cell.species = "Белый гриб"
+            if on_progress:
+                on_progress(i + 1, grid.total)
+        return grid
+
+    monkeypatch.setattr(heatfetch, "fetch_grid", fake_fetch)
+    p = PlacePicker(56.0, 38.0, lambda *_: None)
+    p.open()
+    try:
+        assert p.map.heat is None
+        p._start_heat()
+        assert _wait_for(lambda: p.map.heat is not None)
+        assert all(c.index is not None for c in p.map.heat.cells)
+        assert not p.b_heat.disabled
+        assert "Раскрашено" in p.heat_status.text
+    finally:
+        p.dismiss()
+
+
+def test_heat_button_reports_a_clean_failure(app, monkeypatch):
+    """Сеть подвела совсем — сообщение об этом, а не пустая раскрашенная
+    карта и не молчание."""
+    import heatfetch
+    from mapview import PlacePicker
+
+    def fake_fetch(grid, forecast_days=7, on_progress=None):
+        for cell in grid.cells:
+            cell.error = "нет сети"
+        return grid
+
+    monkeypatch.setattr(heatfetch, "fetch_grid", fake_fetch)
+    p = PlacePicker(56.0, 38.0, lambda *_: None)
+    p.open()
+    try:
+        p._start_heat()
+        assert _wait_for(lambda: not p.b_heat.disabled)
+        assert "Не получилось" in p.heat_status.text
+        assert all(c.index is None for c in p.map.heat.cells)
+    finally:
+        p.dismiss()
+
+
+def test_heat_button_reports_partial_failure(app, monkeypatch):
+    """Часть клеток не ответила — видно и это, а не только «готово»."""
+    import heatfetch
+    from mapview import PlacePicker
+
+    def fake_fetch(grid, forecast_days=7, on_progress=None):
+        for i, cell in enumerate(grid.cells):
+            if i == 0:
+                cell.error = "нет сети"
+            else:
+                cell.index = 30.0
+        return grid
+
+    monkeypatch.setattr(heatfetch, "fetch_grid", fake_fetch)
+    p = PlacePicker(56.0, 38.0, lambda *_: None)
+    p.open()
+    try:
+        p._start_heat()
+        assert _wait_for(lambda: not p.b_heat.disabled)
+        assert "1 из" in p.heat_status.text
+    finally:
+        p.dismiss()
+
+
+def test_heat_button_disabled_while_running(app, monkeypatch):
+    """Повторное нажатие во время расчёта не должно запускать второй поток
+    поверх первого."""
+    import heatfetch
+    from mapview import PlacePicker
+
+    started = []
+
+    def slow_fetch(grid, forecast_days=7, on_progress=None):
+        started.append(1)
+        import time as _time
+        _time.sleep(0.3)
+        for cell in grid.cells:
+            cell.index = 20.0
+        return grid
+
+    monkeypatch.setattr(heatfetch, "fetch_grid", slow_fetch)
+    p = PlacePicker(56.0, 38.0, lambda *_: None)
+    p.open()
+    try:
+        p._start_heat()
+        assert p.b_heat.disabled is True
+        assert _wait_for(lambda: not p.b_heat.disabled, timeout_s=3.0)
+        assert len(started) == 1
+    finally:
+        p.dismiss()
+
+
+def test_heat_grid_uses_the_currently_visible_area(app, monkeypatch):
+    """Сетка строится по тому, что видно сейчас, а не по каким-то умолчаниям."""
+    import heatgrid
+    from mapview import PlacePicker
+
+    captured = {}
+    original = heatgrid.plan
+
+    def spy(*a, **kw):
+        g = original(*a, **kw)
+        captured["bounds"] = a
+        return g
+
+    monkeypatch.setattr("mapview.heatgrid.plan", spy)
+    p = PlacePicker(56.0, 38.0, lambda *_: None)
+    p.open()
+    try:
+        p.map.size = (300, 300)
+        expected = p.map.visible_bounds()
+        p._start_heat()
+        assert captured["bounds"] == expected
+    finally:
+        p.dismiss()
+
+
+def test_heat_overlay_does_not_survive_between_unrelated_maps():
+    """Новая карта не должна унаследовать чужую раскраску."""
+    from mapview import TileMap
+
+    m = TileMap(56.0, 38.0)
+    assert m.heat is None
+
+
+def test_walk_journal_opens(app):
+    app.show_walk_journal()
+
+
+
 def test_tilemap_reset_touches_clears_stuck_drag():
     """Ровно тот баг из леса: экран гаснет посреди перетаскивания карты,
     on_touch_up никогда не приходит, self._touches остаётся с чужим
