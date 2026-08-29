@@ -34,7 +34,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.6"
+VERSION = "3.7"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -168,10 +168,10 @@ SNOW_GONE = 0.02                 # ниже этого считаем, что с
 GDD_BASE = 5.0                   # база для накопления тепла после схода снега
 
 
-def _get_json(url: str, params: dict) -> dict:
+def _get_json(url: str, params: dict, timeout: int = 25) -> dict:
     full = url + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(full, headers={"User-Agent": "mushroom-forecast/1.0"})
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -354,35 +354,24 @@ def _daily_mean(times: list[str], values: list) -> dict[date, float]:
     return {d: sum(vs) / len(vs) for d, vs in acc.items() if vs}
 
 
-def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
-    daily = ["temperature_2m_max", "temperature_2m_min", "temperature_2m_mean",
-             "precipitation_sum", "et0_fao_evapotranspiration", "relative_humidity_2m_mean"]
-    base = {
-        "latitude": place.lat, "longitude": place.lon,
-        "timezone": "auto",
-        "past_days": PAST_DAYS, "forecast_days": max(3, min(16, forecast_days)),
-    }
+#: Общий набор суточных переменных. Вынесен в константу модуля — тем же
+#: списком пользуется heatgrid при пакетном запросе на сетку клеток: если
+#: набор здесь поменяется, там он должен поменяться сам, а не разъехаться.
+DAILY_VARS = ["temperature_2m_max", "temperature_2m_min", "temperature_2m_mean",
+              "precipitation_sum", "et0_fao_evapotranspiration",
+              "relative_humidity_2m_mean"]
 
-    data, soil_keys, has_snow = None, None, False
-    for t_key, w_key in SOIL_CANDIDATES:
-        for extra in (f",{SNOW_KEY}", ""):
-            params = dict(base, daily=",".join(daily),
-                          hourly=f"{t_key},{w_key}{extra}")
-            try:
-                data = _get_json(FORECAST_URL, params)
-                soil_keys, has_snow = (t_key, w_key), bool(extra)
-                break
-            except urllib.error.HTTPError:
-                continue
-        if data is not None:
-            break
-    if data is None:
-        # ни один набор слоёв не поддержан — работаем на суточных данных
-        try:
-            data = _get_json(FORECAST_URL, dict(base, daily=",".join(daily)))
-        except urllib.error.HTTPError:
-            data = _get_json(FORECAST_URL, dict(base, daily=",".join(daily[:-1])))
 
+def _parse_daily_blob(data: dict, soil_keys: tuple | None,
+                      has_snow: bool) -> list[Day]:
+    """JSON-ответ Open-Meteo на ОДНУ точку -> список Day.
+
+    Отдельная функция ровно ради heatgrid: там та же самая распаковка
+    нужна на каждую клетку сетки, и держать её в двух местах — значит
+    однажды поправить одно и забыть другое. `fetch_weather` ниже и
+    heatfetch и пользуются этой функцией, разница только в том, как
+    получен сам `data`: одним запросом или как часть пакетного.
+    """
     soil_t_map: dict[date, float] = {}
     soil_w_map: dict[date, float] = {}
     snow_map: dict[date, float] = {}
@@ -409,6 +398,68 @@ def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
                        None if rh is None else float(rh),
                        soil_t_map.get(d), soil_w_map.get(d), snow_map.get(d)))
     return out
+
+
+def probe_soil_keys(lat: float, lon: float, forecast_days: int):
+    """Перебирает наборы почвенных слоёв для ОДНОЙ точки и возвращает
+    (soil_keys, has_snow, данные_этой_точки) — тот набор, который сервер
+    принял.
+
+    Вынесено из fetch_weather ради heatgrid: там перебор делается один раз
+    для центра сетки, а не на каждую из тридцати шести клеток — сервис,
+    поддерживающий слои почвы в одном месте области, почти наверняка
+    поддерживает их и в соседних, и тратить на это отдельный перебор на
+    каждую клетку — это лишние секунды и лишний трафик без всякой пользы.
+    """
+    daily = ",".join(DAILY_VARS)
+    base = {"latitude": lat, "longitude": lon, "timezone": "auto",
+            "past_days": PAST_DAYS, "forecast_days": max(3, min(16, forecast_days))}
+    for t_key, w_key in SOIL_CANDIDATES:
+        for extra in (f",{SNOW_KEY}", ""):
+            params = dict(base, daily=daily, hourly=f"{t_key},{w_key}{extra}")
+            try:
+                data = _get_json(FORECAST_URL, params)
+                return (t_key, w_key), bool(extra), data
+            except urllib.error.HTTPError:
+                continue
+    # ни один набор не поддержан — суточные данные без слоёв почвы
+    try:
+        data = _get_json(FORECAST_URL, dict(base, daily=daily))
+    except urllib.error.HTTPError:
+        data = _get_json(FORECAST_URL, dict(base, daily=",".join(DAILY_VARS[:-1])))
+    return None, False, data
+
+
+def fetch_weather_with_keys(lat: float, lon: float, forecast_days: int,
+                            soil_keys, has_snow: bool) -> list[Day]:
+    """Один запрос по уже известному набору слоёв почвы — без перебора.
+
+    Перебор (probe_soil_keys) стоит делать один раз на область, не на
+    каждую точку: сервис, поддерживающий слои почвы у одной точки,
+    поддерживает их и у соседних. Эта функция — тот самый «уже знаем,
+    что просить» путь, которым пользуется heatfetch на резервном ходе, и
+    которым может пользоваться что угодно ещё, где soil_keys уже известны.
+    """
+    daily = ",".join(DAILY_VARS)
+    params = {"latitude": lat, "longitude": lon, "timezone": "auto",
+             "past_days": PAST_DAYS,
+             "forecast_days": max(3, min(16, forecast_days)), "daily": daily}
+    if soil_keys:
+        extra = f",{SNOW_KEY}" if has_snow else ""
+        params["hourly"] = f"{soil_keys[0]},{soil_keys[1]}{extra}"
+    try:
+        data = _get_json(FORECAST_URL, params)
+    except urllib.error.HTTPError:
+        # Ключи, годные для соседей, для этой конкретной точки почему-то не
+        # подошли — редко, но не исключено на границе покрытия. Тогда всё
+        # же пробуем подобрать заново, только для нее одной.
+        soil_keys, has_snow, data = probe_soil_keys(lat, lon, forecast_days)
+    return _parse_daily_blob(data, soil_keys, has_snow)
+
+
+def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
+    soil_keys, has_snow, data = probe_soil_keys(place.lat, place.lon, forecast_days)
+    return _parse_daily_blob(data, soil_keys, has_snow)
 
 
 def demo_weather(forecast_days: int, seed: int = 7) -> tuple[Place, list[Day]]:

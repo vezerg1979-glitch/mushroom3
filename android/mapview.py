@@ -40,6 +40,8 @@ import palette
 import theme
 import tilesource
 
+import heatfetch
+import heatgrid
 import mushroom_forecast as engine
 import places as places_mod
 
@@ -124,6 +126,7 @@ class TileMap(Widget):
         self.here = None          # текущее положение (lat, lon)
         self.heading = None       # куда повёрнут человек, градусы от севера
         self.follow = False       # держать текущее положение в центре
+        self.heat = None          # heatgrid.Grid — сетка индекса поверх карты
         self.bind(pos=self.redraw, size=self.redraw)
 
     # --- кэш тайлов ---------------------------------------------------------
@@ -410,6 +413,9 @@ class TileMap(Widget):
 
     #: Насколько блёклой рисуется нитка старого маршрута.
     OLD_TRAIL_A = 0.38
+    #: Прозрачность клеток сетки индекса. Плотнее — и трек с находками
+    #: под ней потеряются; прозрачнее — не видно, где выше, где ниже.
+    HEAT_ALPHA = 0.45
 
     #: Радиус, в котором касание считается попаданием по старой находке.
     SPOT_TOUCH = dp(18)
@@ -434,6 +440,41 @@ class TileMap(Widget):
         x, y = self._screen(lat, lon)
         return (self.x - margin <= x <= self.right + margin
                 and self.y - margin <= y <= self.top + margin)
+
+    def visible_bounds(self):
+        """Углы видимой области в координатах: (юг, запад, север, восток).
+
+        Через уже готовую обратную проекцию _latlon — тем самым способом,
+        которым виджет и так переводит экран в координаты при касании.
+        Отдельная функция ради heatgrid.plan(): ему нужны именно эти
+        четыре числа, а не что-то из внутренностей карты (cx/cy/zoom).
+        """
+        south_lat, west_lon = self._latlon(self.x, self.y)
+        north_lat, east_lon = self._latlon(self.right, self.top)
+        return south_lat, west_lon, north_lat, east_lon
+
+    def _draw_heat(self):
+        """Клетки сетки индекса: полупрозрачный прямоугольник на клетку.
+
+        half_km у клетки — половина стороны в километрах, а не в пикселях;
+        переводим через ту же проекцию, что и весь остальной слой (_screen),
+        находя экранные координаты противоположных углов клетки, а не
+        считая пиксели на километр отдельной формулой — так масштаб верен
+        на любом зуме без дополнительной подгонки.
+        """
+        grid = self.heat
+        deg_per_km_lat = 1.0 / 111.32
+        for cell in grid.cells:
+            if cell.index is None:
+                continue                    # ошибка сети — клетка не красится
+            dlat = cell.half_km * deg_per_km_lat
+            dlon = dlat / max(0.15, math.cos(math.radians(cell.lat)))
+            x0, y0 = self._screen(cell.lat - dlat, cell.lon - dlon)
+            x1, y1 = self._screen(cell.lat + dlat, cell.lon + dlon)
+            bg, _ = palette.level_colors(cell.index)
+            Color(*hexc(bg)[:3], self.HEAT_ALPHA)
+            Rectangle(pos=(min(x0, x1), min(y0, y1)),
+                     size=(abs(x1 - x0), abs(y1 - y0)))
 
     def _draw_history(self):
         h = self.history
@@ -525,6 +566,13 @@ class TileMap(Widget):
             if palette.current() == "ночь":
                 Color(0, 0, 0, MAP_DIM)
                 Rectangle(pos=self.pos, size=self.size)
+
+            # Сетка индекса рисуется ПОВЕРХ ночной пелены, не под ней: у
+            # неё свои, уже подобранные под темноту цвета (palette.LEVELS
+            # меняется вместе с темой), и накладывать на них ещё и общее
+            # затемнение — значит красить дважды и терять контраст шкалы.
+            if self.heat is not None:
+                self._draw_heat()
 
             # Прошлые походы — под всем сегодняшним: подложка не должна
             # спорить с живым треком и своей точкой.
@@ -676,6 +724,28 @@ class PlacePicker(Popup):
         zrow.add_widget(self.lbl)
         root.add_widget(zrow)
 
+        # Раскраска по погоде — отдельным рядом, со своей строкой статуса:
+        # прогресс должен быть виден по-честному («считаю 14 из 30»), а не
+        # спрятан за спиннером, потому что пакетный запрос на всю область
+        # либо проходит целиком, либо нет, а резервный путь идёт по одной
+        # точке и может занять заметное время.
+        heat_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+        self.b_heat = Button(text="Раскрасить", font_size=sp(13),
+                             background_normal="", background_color=hexc(palette.SOFT),
+                             color=INK)
+        self.b_heat.bind(on_release=lambda *_: self._start_heat())
+        heat_row.add_widget(self.b_heat)
+        root.add_widget(heat_row)
+        self.heat_status = Label(
+            text="Цвет — только погода: тепло и влажность. Тип леса "
+                 "везде считается смешанным, это не то, что растёт "
+                 "именно тут — это вы знаете сами.",
+            font_size=sp(10), color=MUTED, size_hint_y=None, height=dp(28),
+            halign="left", valign="top")
+        self.heat_status.bind(
+            size=lambda w, s: setattr(w, "text_size", (s[0], None)))
+        root.add_widget(self.heat_status)
+
         # Кнопка сохранения карты стоит здесь, а не на главном экране:
         # человек уже смотрит на нужный кусок местности и видит, что именно
         # сохраняет. На главном экране это была бы кнопка «сохранить
@@ -714,6 +784,50 @@ class PlacePicker(Popup):
     def _history_ready(self, h):
         self.map.history = h
         self.map.redraw()
+
+    def _start_heat(self):
+        """Кнопка «Раскрасить»: сетка по видимой сейчас области карты.
+
+        Сетка строится по тому, что видно ПРЯМО СЕЙЧАС — отодвинули карту
+        дальше или ближе, и следующее нажатие посчитает уже другую область
+        своего размера. Расчёт идёт в фоновом потоке: и пакетный запрос, и
+        тем более резервный по одной точке — это не то, что можно делать,
+        не отпуская интерфейс.
+        """
+        south, west, north, east = self.map.visible_bounds()
+        grid = heatgrid.plan(south, west, north, east)
+        if not grid:
+            self.heat_status.text = "Карта ещё не готова — подождите секунду и попробуйте снова."
+            return
+        self.b_heat.disabled = True
+        self.heat_status.text = f"Считаю 0 из {grid.total}…"
+        threading.Thread(target=self._run_heat, args=(grid,), daemon=True).start()
+
+    def _run_heat(self, grid):
+        heatfetch.fetch_grid(grid, forecast_days=7, on_progress=self._heat_progress)
+        self._heat_done(grid)
+
+    @mainthread
+    def _heat_progress(self, done, total):
+        self.heat_status.text = f"Считаю {done} из {total}…"
+
+    @mainthread
+    def _heat_done(self, grid):
+        self.b_heat.disabled = False
+        self.map.heat = grid
+        self.map.redraw()
+        неудачных = sum(1 for c in grid.cells if c.error)
+        if неудачных == grid.total:
+            self.heat_status.text = ("Не получилось — проверьте соединение "
+                                     "и попробуйте ещё раз.")
+        elif неудачных:
+            self.heat_status.text = (f"Раскрашено, {неудачных} из "
+                                     f"{grid.total} клеток без ответа сети. "
+                                     "Цвет — только погода, не тип леса.")
+        else:
+            self.heat_status.text = ("Раскрашено по погоде. Тип леса везде "
+                                     "считается смешанным — где что растёт, "
+                                     "вы знаете сами.")
 
     def _save_offline(self):
         """Скачать квадрат карты вокруг выбранной точки."""
