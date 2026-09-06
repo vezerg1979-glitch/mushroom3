@@ -169,8 +169,71 @@ SPECIES_NIGHT = {
     "Клюква": "#D66E86",
 }
 
-THEMES = {"день": (DAY, LEVELS_DAY, SPECIES_DAY, RAIN_DAY),
-          "ночь": (NIGHT, LEVELS_NIGHT, SPECIES_NIGHT, RAIN_NIGHT)}
+# --------------------------------------------------------------------------- #
+#  Раскраска карты по погоде
+# --------------------------------------------------------------------------- #
+#
+# Отдельный градиент, не level_colors(). Семь плашек выше подобраны под
+# контраст ЦИФРЫ поверх заливки — низ шкалы там нарочно почти белый
+# (#F2F2EE), чтобы тёмная цифра на нём читалась. На клетке карты никакой
+# цифры нет, а полупрозрачная почти-белая заливка поверх бежевых тайлов
+# OSM попросту не видна — карта выглядела тускло не потому, что так
+# задумано, а потому что для другой задачи. Здесь два рычага сразу: цвет
+# идёт не по одному оттенку светлее-темнее, а через жёлтый (суше — жёлто-
+# коричневый, обильнее — насыщенно-зелёный, как на снимках вегетации), и
+# прозрачность растёт вместе со значением — низкий индекс не эту клетку
+# не выделять вовсе, а не красить её бледно.
+
+#: (значение, цвет, прозрачность) — по возрастанию. Между точками цвет и
+#: прозрачность считаются линейной интерполяцией, а не берутся ступенькой,
+#: поэтому граница между соседними клетками разного индекса не режет глаз.
+HEAT_GRADIENT_DAY = [
+    (0,   "#C9B37C", 0.12),
+    (25,  "#D9C23E", 0.32),
+    (50,  "#9FCB3B", 0.48),
+    (75,  "#4CAE2E", 0.60),
+    (100, "#1B7A1F", 0.72),
+]
+
+HEAT_GRADIENT_NIGHT = [
+    (0,   "#8A7A52", 0.15),
+    (25,  "#A89530", 0.35),
+    (50,  "#7FA02E", 0.50),
+    (75,  "#3F8A28", 0.62),
+    (100, "#1F6B22", 0.75),
+]
+
+HEAT_GRADIENT = HEAT_GRADIENT_DAY
+
+
+def _hex_rgb(color: str) -> tuple:
+    h = color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def heat_color(value: float):
+    """Цвет и прозрачность клетки карты для значения индекса 0..100.
+
+    Возвращает (r, g, b, a) — готовый кортеж для Color(*heat_color(v)) в
+    Kivy, без промежуточного hexc(). Значения за пределами 0..100 не
+    бросают исключение, а прижимаются к краю шкалы: сеть может дать и
+    отрицательный выброс на стыке дней, обрывать из-за этого отрисовку
+    нельзя.
+    """
+    grad = HEAT_GRADIENT
+    v = max(grad[0][0], min(grad[-1][0], value))
+    for (v0, c0, a0), (v1, c1, a1) in zip(grad, grad[1:]):
+        if v0 <= v <= v1:
+            t = (v - v0) / (v1 - v0) if v1 > v0 else 0.0
+            r0, g0, b0 = _hex_rgb(c0)
+            r1, g1, b1 = _hex_rgb(c1)
+            return (r0 + (r1 - r0) * t, g0 + (g1 - g0) * t,
+                    b0 + (b1 - b0) * t, a0 + (a1 - a0) * t)
+    return (*_hex_rgb(grad[-1][1]), grad[-1][2])
+
+
+THEMES = {"день": (DAY, LEVELS_DAY, SPECIES_DAY, RAIN_DAY, HEAT_GRADIENT_DAY),
+          "ночь": (NIGHT, LEVELS_NIGHT, SPECIES_NIGHT, RAIN_NIGHT, HEAT_GRADIENT_NIGHT)}
 
 _current = "день"
 
@@ -185,12 +248,13 @@ def use(name: str) -> str:
     if name not in THEMES:
         raise ValueError(f"нет такой темы: {name!r}; "
                          f"есть: {', '.join(THEMES)}")
-    global LEVELS, SPECIES, RAIN, _current
-    colors, levels, species, rain = THEMES[name]
+    global LEVELS, SPECIES, RAIN, HEAT_GRADIENT, _current
+    colors, levels, species, rain, heat = THEMES[name]
     globals().update(colors)
     LEVELS = levels
     SPECIES = species
     RAIN = rain
+    HEAT_GRADIENT = heat
     _current = name
     return name
 
@@ -234,6 +298,9 @@ def level_colors(value: float):
         if value >= threshold:
             return bg, fg
     return LEVELS[-1][1], LEVELS[-1][2]
+
+
+
 
 
 # Дневной набор — по умолчанию: приложение открывают чаще днём.

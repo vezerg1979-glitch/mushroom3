@@ -413,9 +413,6 @@ class TileMap(Widget):
 
     #: Насколько блёклой рисуется нитка старого маршрута.
     OLD_TRAIL_A = 0.38
-    #: Прозрачность клеток сетки индекса. Плотнее — и трек с находками
-    #: под ней потеряются; прозрачнее — не видно, где выше, где ниже.
-    HEAT_ALPHA = 0.45
 
     #: Радиус, в котором касание считается попаданием по старой находке.
     SPOT_TOUCH = dp(18)
@@ -471,8 +468,12 @@ class TileMap(Widget):
             dlon = dlat / max(0.15, math.cos(math.radians(cell.lat)))
             x0, y0 = self._screen(cell.lat - dlat, cell.lon - dlon)
             x1, y1 = self._screen(cell.lat + dlat, cell.lon + dlon)
-            bg, _ = palette.level_colors(cell.index)
-            Color(*hexc(bg)[:3], self.HEAT_ALPHA)
+            # Свой градиент, не palette.level_colors(): та шкала подобрана
+            # под контраст ЦИФРЫ на плашке, а на клетке карты цифры нет.
+            # heat_color() ведёт цвет через жёлтый к насыщенному зелёному
+            # и заодно поднимает непрозрачность вместе со значением — низкий
+            # индекс еле подсвечивает клетку, а не красит её бледно-белым.
+            Color(*palette.heat_color(cell.index))
             Rectangle(pos=(min(x0, x1), min(y0, y1)),
                      size=(abs(x1 - x0), abs(y1 - y0)))
 
