@@ -34,7 +34,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.9"
+VERSION = "3.10"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -766,6 +766,16 @@ def soil_temperature(days: list[Day], alpha: float = 0.32) -> list[float]:
     return out
 
 
+#: Сход снега вне этих месяцев — не сход снега, а ошибка распознавания.
+#: Разовое похолодание почвы в конце лета или лёгкий снег в сентябре,
+#: растаявший за пару дней, устроены ровно как настоящий мартовский сход
+#: с точки зрения обоих способов ниже — а раз в год такое бывает, и без
+#: этой проверки ягода, которую смотрят осенью, однажды получала бы
+#: «снег сошёл» в сентябре. Апрель у Полярного круга ещё не редкость,
+#: поэтому граница взята с запасом в обе стороны.
+MELT_MONTHS = range(2, 8)          # февраль..июль включительно
+
+
 def snowmelt_gdd(days: list[Day], ts: list[float]) -> tuple[list[float], date | None]:
     """Накопленное тепло с момента схода снега, °C·сут.
 
@@ -773,6 +783,11 @@ def snowmelt_gdd(days: list[Day], ts: list[float]) -> tuple[list[float], date | 
     по первому устойчивому переходу температуры почвы через нуль. После этого
     считается сумма (T почвы − 5 °C) по суткам: именно она задаёт срок весенних
     видов лучше, чем календарь.
+
+    Найденная дата обязана попасть в MELT_MONTHS — иначе это не сход снега,
+    а ошибка распознавания на данных, где настоящей весны просто не видно
+    (см. докстрок константы). В этом случае честнее вернуть «не определено»,
+    чем предъявить уверенную, но неверную дату.
     """
     snow = _filled(days, "snow", min_share=0.7)
     melt_i = None
@@ -781,8 +796,15 @@ def snowmelt_gdd(days: list[Day], ts: list[float]) -> tuple[list[float], date | 
             if snow[i] >= SNOW_GONE:
                 melt_i = min(i + 1, len(days) - 1)
                 break
-        else:
-            melt_i = 0
+        # Снега нет НИГДЕ в окне — значит, сошёл ещё до его начала, а не
+        # «прямо в первый день». Раньше здесь стояло melt_i = 0, и это
+        # тихо подставляло начало окна вместо настоящей даты: с каждой
+        # следующей проверкой позже по сезону «сход» полз вперёд вместе с
+        # окном, а накопленное тепло считалось от заведомо не той точки.
+        # Для гриба, которого смотрят вскоре после весны, ошибка небольшая;
+        # для ягоды, которую смотрят всё лето и осень, эта дата к июлю
+        # успевала уехать на месяцы от настоящей. Честнее сказать «не
+        # определено» — resolve() ниже уже знает, что тогда делать.
     else:
         for i in range(2, len(days)):
             if ts[i] > 0.5 and ts[i - 1] > 0.5 and ts[i - 2] <= 0.5:
@@ -790,7 +812,7 @@ def snowmelt_gdd(days: list[Day], ts: list[float]) -> tuple[list[float], date | 
                 break
 
     out = [0.0] * len(days)
-    if melt_i is None:
+    if melt_i is None or days[melt_i].d.month not in MELT_MONTHS:
         return out, None
     acc = 0.0
     for i in range(melt_i, len(days)):
