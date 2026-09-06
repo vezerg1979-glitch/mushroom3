@@ -92,7 +92,7 @@ def test_night_species_curves_stand_out_from_the_dark_card():
     жёлтая лисичка на белом даёт 2.17, и трогать это здесь — значит менять
     привычный вид графика заодно с темой. Отдельная задача.
     """
-    colors, _, species, _ = palette.THEMES["ночь"]
+    colors, _, species, _, _ = palette.THEMES["ночь"]
     for vid, color in species.items():
         ratio = palette.contrast(color, colors["CARD"])
         assert ratio >= 2.5, f"{vid}: {ratio:.2f}"
@@ -126,7 +126,109 @@ def test_every_theme_defines_the_same_names(name):
     assert set(palette.THEMES[name][2]) == set(palette.SPECIES_DAY)
 
 
-def test_switching_back_and_forth_restores_colours():
+# --------------------------------------------------------------------------- #
+#  Раскраска карты по погоде
+# --------------------------------------------------------------------------- #
+
+def test_heat_color_endpoints_match_the_gradient_definition():
+    r, g, b, a = palette.heat_color(0)
+    assert (round(r, 3), round(g, 3), round(b, 3)) == tuple(
+        round(c, 3) for c in palette._hex_rgb(palette.HEAT_GRADIENT[0][1]))
+    assert a == palette.HEAT_GRADIENT[0][2]
+
+    r, g, b, a = palette.heat_color(100)
+    assert (round(r, 3), round(g, 3), round(b, 3)) == tuple(
+        round(c, 3) for c in palette._hex_rgb(palette.HEAT_GRADIENT[-1][1]))
+    assert a == palette.HEAT_GRADIENT[-1][2]
+
+
+def test_heat_color_clamps_out_of_range_values():
+    """Сеть может дать выброс на стыке дней — обрывать отрисовку нельзя."""
+    assert palette.heat_color(-40) == palette.heat_color(0)
+    assert palette.heat_color(500) == palette.heat_color(100)
+
+
+def test_heat_color_interpolates_smoothly_between_stops():
+    """Соседние клетки разного индекса не должны давать резкий скачок
+    цвета — иначе граница между ними режет глаз сильнее самого рельефа."""
+    было = None
+    for v in range(0, 101, 2):
+        r, g, b, a = palette.heat_color(v)
+        if было is not None:
+            шаг = max(abs(r - было[0]), abs(g - было[1]),
+                      abs(b - было[2]), abs(a - было[3]))
+            assert шаг < 0.06, f"скачок цвета на значении {v}: {шаг:.3f}"
+        было = (r, g, b, a)
+
+
+def test_heat_color_gets_more_opaque_as_the_value_grows():
+    """Низкий индекс должен еле подсвечивать клетку, а не красить её тем
+    же по силе цветом, что и высокий — иначе «ярче» не про что говорить."""
+    _, _, _, a_low = palette.heat_color(0)
+    _, _, _, a_mid = palette.heat_color(50)
+    _, _, _, a_high = palette.heat_color(100)
+    assert a_low < a_mid < a_high
+
+
+def test_heat_gradient_is_brighter_than_the_plate_scale():
+    """Ради чего затевалась вся правка: клетка карты не должна быть такой
+    же бледной, как нижняя плашка индекса (#F2F2EE — почти белый).
+
+    Сравнение имеет смысл только днём: там нижняя плашка и правда почти
+    белая, и именно она терялась на бежевой подложке карты. Ночью нижняя
+    плашка сама тёмно-зелёная (#242A20) — там другая забота: не белизна,
+    а чтобы низ шкалы не сливался с и так тёмной картой, и это отдельная
+    проверка ниже, не сравнение с плашкой.
+    """
+    было = palette.current()
+    try:
+        palette.use("день")
+        плашка_низ = palette.luminance(palette.LEVELS[-1][1])
+        r, g, b, _ = palette.heat_color(60)
+        карта_средняя = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        assert карта_средняя < плашка_низ
+    finally:
+        palette.use(было)
+
+
+def test_night_heat_gradient_stays_visible_against_the_dark_map():
+    """Ночью подложка карты и так тёмная (MAP_DIM) — низ градиента не
+    должен провалиться в тот же почти-чёрный, иначе клетка с индексом 0
+    от пустого места не отличить."""
+    было = palette.current()
+    try:
+        palette.use("ночь")
+        r, g, b, _ = palette.heat_color(0)
+        яркость = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        assert яркость > palette.luminance(palette.MAP_BASE)
+    finally:
+        palette.use(было)
+
+
+def test_both_themes_define_a_five_stop_gradient_from_zero_to_hundred():
+    for name in ("день", "ночь"):
+        grad = palette.THEMES[name][4]
+        assert grad[0][0] == 0
+        assert grad[-1][0] == 100
+        значения = [v for v, _, _ in grad]
+        assert значения == sorted(значения), f"{name}: значения должны идти по возрастанию"
+
+
+def test_heat_gradient_survives_theme_switching():
+    было = palette.current()
+    try:
+        palette.use("день")
+        день = palette.heat_color(80)
+        palette.use("ночь")
+        ночь = palette.heat_color(80)
+        assert день != ночь, "ночной градиент должен отличаться от дневного"
+        palette.use("день")
+        assert palette.heat_color(80) == день
+    finally:
+        palette.use(было)
+
+
+
     было = palette.current()
     day = palette.BG
     palette.use("ночь")
