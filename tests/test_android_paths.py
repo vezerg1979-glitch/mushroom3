@@ -323,12 +323,13 @@ def test_ads_never_touched_from_the_walk_screen():
 #  Полноэкранная реклама (interstitial)
 # --------------------------------------------------------------------------- #
 
-def test_interstitial_shows_once_when_free(android, monkeypatch):
-    """Обычный ход: телефон, реклама не куплена, ещё не показывали за этот
-    запуск — попытка показа начинается."""
+def test_interstitial_shows_when_free_and_due(android, monkeypatch):
+    """Обычный ход: телефон, реклама не куплена, перерыв с прошлого показа
+    прошёл (только что запустились — время последнего показа нулевое) —
+    попытка показа начинается."""
     interstitial = android["interstitial"]
     monkeypatch.setattr(interstitial.premium, "is_premium", lambda: False)
-    assert interstitial.show_once() is True
+    assert interstitial.maybe_show() is True
     assert interstitial.last_error == ""
 
 
@@ -338,16 +339,32 @@ def test_interstitial_skipped_after_purchase(android, monkeypatch):
     interstitial = android["interstitial"]
     monkeypatch.setattr(interstitial.premium, "is_premium", lambda: True)
     assert interstitial.should_show() is False
-    assert interstitial.show_once() is False
+    assert interstitial.maybe_show() is False
 
 
-def test_interstitial_shown_once_per_run(android, monkeypatch):
-    """Второй вызов за тот же запуск не должен начинать вторую загрузку —
-    полноэкранная реклама навязчивее баннера, дважды за сессию не нужна."""
+def test_interstitial_respects_the_cooldown(android, monkeypatch):
+    """Второй вызов сразу после первого не должен начинать вторую загрузку —
+    полноэкранная реклама навязчивее баннера, и на действие вроде «закрыл
+    журнал через десять секунд после итогов похода» второй показ подряд
+    был бы явным перебором."""
     interstitial = android["interstitial"]
     monkeypatch.setattr(interstitial.premium, "is_premium", lambda: False)
-    assert interstitial.show_once() is True
-    assert interstitial.show_once() is False
+    assert interstitial.maybe_show() is True
+    assert interstitial.maybe_show() is False
+
+
+def test_interstitial_shows_again_once_the_cooldown_passes(android, monkeypatch):
+    """Но не молчит навсегда: как только перерыв прошёл, следующее
+    подходящее действие снова может показать рекламу."""
+    interstitial = android["interstitial"]
+    monkeypatch.setattr(interstitial.premium, "is_premium", lambda: False)
+    assert interstitial.maybe_show() is True
+    assert interstitial.maybe_show() is False
+
+    было = interstitial._last_shown_at
+    monkeypatch.setattr(interstitial, "_last_shown_at",
+                        было - interstitial.MIN_INTERVAL_S - 1)
+    assert interstitial.maybe_show() is True
 
 
 def test_interstitial_failure_is_recorded_not_raised(android, monkeypatch):
@@ -367,7 +384,7 @@ def test_interstitial_failure_is_recorded_not_raised(android, monkeypatch):
 
     import jnius
     monkeypatch.setattr(jnius, "autoclass", падает)
-    assert interstitial.show_once() is False
+    assert interstitial.maybe_show() is False
     assert "нет такого класса" in interstitial.last_error
 
 

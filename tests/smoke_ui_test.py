@@ -860,6 +860,124 @@ def test_main_screen_builds(app):
     assert app.sp_kind.values
 
 
+# --------------------------------------------------------------------------- #
+#  Ягоды в списке выбора и в графике
+# --------------------------------------------------------------------------- #
+
+def test_saved_kind_recognises_both_mushrooms_and_berries(app):
+    """Сохранённый выбор восстанавливается что для гриба, что для ягоды.
+
+    Это ровно то поведение, которое статическая проверка в
+    test_prefs_and_buzz.py (файл без Kivy) доказать не может — main.py
+    требует настоящего Kivy для импорта. Проверяется здесь, на живом классе.
+    """
+    import mushroom_forecast as engine
+
+    гриб = next(iter(engine.SPECIES.values())).name
+    ягода = next(iter(engine.BERRIES.values())).name
+    cls = type(app)
+    assert cls._saved_kind({"kind": гриб}) == гриб
+    assert cls._saved_kind({"kind": ягода}) == ягода
+    assert cls._saved_kind({"kind": "Динозавр"}) == cls.ALL_KINDS
+    assert cls._saved_kind({}) == cls.ALL_KINDS
+
+
+def test_species_picker_lists_berries_too(app):
+    """В спиннере видов ягода должна быть видна рядом с грибами, а не
+    только в подсчёте графика."""
+    import mushroom_forecast as engine
+
+    ягода = next(iter(engine.BERRIES.values())).name
+    assert ягода in app.sp_kind.values
+
+
+def test_picking_a_berry_as_the_days_best_does_not_crash_the_explain_card(app):
+    """Тот самый случай, который раньше падал: если лучший вид дня —
+    ягода, карточка «Почему такой индекс» не должна валиться со
+    StopIteration в поиске Species-объекта."""
+    import mushroom_forecast as engine
+
+    app_mod = _android_main()
+    place, days = engine.demo_weather(7)
+    res = app_mod.Result(place, days, len(days) - 3)
+
+    # Подменяем индекс так, чтобы лучшим видом дня гарантированно оказалась
+    # ягода — иначе тест зависел бы от случайных чисел синтетической погоды.
+    ягода = next(iter(engine.BERRIES.values())).name
+    res.idx[ягода] = [999.0] * len(days)
+
+    app.res = res
+    app.sel = None                      # «Все виды сезона» — выбирает лучший
+    app.refresh()                       # не должно бросить исключение
+    app.show_day(res.today)             # карточка «Почему такой индекс»
+
+
+# --------------------------------------------------------------------------- #
+#  Реклама после действий, а не только при запуске
+# --------------------------------------------------------------------------- #
+
+def test_walk_summary_offers_the_interstitial(app, monkeypatch):
+    """Итоги похода — законченное дело: после сводки, не вместо неё,
+    приложение пробует полноэкранную рекламу."""
+    from kivy.clock import Clock
+
+    import interstitial
+    import track as track_mod
+
+    вызвано = []
+    monkeypatch.setattr(interstitial, "maybe_show", lambda: вызвано.append(1))
+
+    walk = track_mod.Walk(place="Тест")
+    walk.add_point(56.0, 38.0, t=walk.started)
+    walk.add_find(56.0, 38.0, "белый")
+    app._walk_done(walk, "")
+    for _ in range(10):
+        Clock.tick()
+    assert вызвано, "после итогов похода реклама не предлагалась"
+
+
+def test_closing_the_journal_offers_the_interstitial(app, monkeypatch):
+    """Реклама — при закрытии журнала, не при открытии: открывая его,
+    человек хочет увидеть свои походы, а не объявление раньше записей."""
+    import interstitial
+
+    вызвано = []
+    monkeypatch.setattr(interstitial, "maybe_show", lambda: вызвано.append(1))
+
+    app.show_walk_journal()
+    assert not вызвано, "реклама не должна предлагаться при открытии журнала"
+    journal = _popup_titled("Журнал походов")
+    journal.dismiss()
+    assert вызвано, "после закрытия журнала реклама не предлагалась"
+
+
+def test_closing_the_place_picker_offers_the_interstitial(app, monkeypatch):
+    """То же самое для карты выбора места: скачал карту или раскрасил её
+    по погоде — дело завершено, окно закрывается."""
+    import interstitial
+
+    вызвано = []
+    monkeypatch.setattr(interstitial, "maybe_show", lambda: вызвано.append(1))
+
+    app.pick_place()
+    picker = _popup_titled("Где считать прогноз")
+    assert not вызвано
+    picker.dismiss()
+    assert вызвано, "после закрытия карты реклама не предлагалась"
+
+
+def test_interstitial_is_never_imported_by_walk_related_modules():
+    """Экран похода и всё, что он использует напрямую, не должны знать о
+    рекламе — ни баннер, ни полноэкранную. Проверяется на уровне исходников,
+    а не только через test_interstitial_never_touched_from_the_walk_screen
+    в test_android_paths.py: здесь тот же вопрос задаётся из дымового
+    набора, ближе к тому, что реально попадёт в собранное приложение."""
+    with open(os.path.join(ROOT, "walkscreen.py"), encoding="utf-8") as f:
+        src = f.read()
+    assert "import interstitial" not in src
+    assert "import ads" not in src
+
+
 def test_help_and_premium_open(app):
     app.show_help()
     app.show_premium()

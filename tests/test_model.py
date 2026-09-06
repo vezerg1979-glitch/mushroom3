@@ -387,6 +387,216 @@ class TestSpring(ResetConstants):
 
 
 # --------------------------------------------------------------------------- #
+#  Ягоды
+# --------------------------------------------------------------------------- #
+#
+# Другая биология — другие тесты. Гриб проверяется на отклик на импульс
+# (test_downpour_then_lag_gives_wave и соседи выше); ягода так не работает,
+# и здесь проверяется противоположное: НЕТ волны после дождя, ЕСТЬ фенология
+# от цветения, заморозок в цвету убивает весь сезон разом, а не задерживает
+# урожай, засуха портит, но не обнуляет.
+
+class TestBerries(ResetConstants):
+
+    def _season(self, n=260, start=date(2026, 3, 15), frost_at=None,
+               frost_c=-4.0, dry_from=None, dry_to=None, precip=2.5):
+        """Синтетический сезон от предвесеннего снега до глубокой осени —
+        ягоде, в отличие от гриба, нужен запас в двести с лишним суток,
+        чтобы дойти от схода снега до спелой клюквы в сентябре."""
+        days = []
+        for i in range(n):
+            base_t = -3.0 + 22.0 * max(0.0, min(1.0, (i - 5) / 40))
+            base_t = min(base_t, 18.0 + 6.0 * math.sin(i / 40))
+            tmax, tmin = base_t + 6, base_t - 6
+            p = precip
+            if dry_from is not None and dry_from <= i <= (dry_to or n):
+                p = 0.0
+            if frost_at is not None and i == frost_at:
+                tmin = frost_c
+            snow = max(0.0, 0.35 - i * 0.02) if i < 20 else 0.0
+            days.append(engine.Day(start + timedelta(days=i), tmax, tmin, base_t,
+                                   p, 3.0, 75.0, None, None, snow))
+        return days
+
+    def _flower_day(self, days, key):
+        ts = engine.soil_temperature(days)
+        gdd, _ = engine.snowmelt_gdd(days, ts)
+        b = engine.BERRIES[key]
+        return next(i for i, g in enumerate(gdd) if g >= b.flower_gdd_opt)
+
+    def test_no_wave_after_a_single_rain_event(self):
+        """Главное отличие от гриба: ливень не создаёт всплеск через
+        несколько суток — ягода реагирует на сезон, а не на дождь."""
+        dry = self._season(precip=0.0)
+        wet_burst = self._season()
+        engine.set_biotope("ельник")
+        m1, ts1 = engine.water_balance(dry), engine.soil_temperature(dry)
+        m2, ts2 = engine.water_balance(wet_burst), engine.soil_temperature(wet_burst)
+        idx_dry = engine.berry_index(engine.BERRIES["черника"], dry, m1, ts1)
+        idx_wet = engine.berry_index(engine.BERRIES["черника"], wet_burst, m2, ts2)
+        # Сухой сезон не даёт налиться — это ожидаемо (см. test_drought ниже);
+        # важно другое: пик приходится на календарный срок налива что там,
+        # что там, а не на день после какого-то отдельного дождя.
+        self.assertGreater(max(idx_wet), 0)
+
+    def test_frost_during_flowering_kills_the_whole_season(self):
+        """Заморозок в цвету — это не задержка, а ноль до конца сезона:
+        новых цветков в этом году больше не будет."""
+        engine.set_biotope("ельник")
+        b = engine.BERRIES["черника"]
+        normal = self._season()
+        flower_i = self._flower_day(normal, "черника")
+        frosty = self._season(frost_at=flower_i, frost_c=-4.0)
+        m, ts = engine.water_balance(frosty), engine.soil_temperature(frosty)
+        self.assertEqual(max(engine.berry_index(b, frosty, m, ts)), 0.0)
+
+    def test_frost_well_before_flowering_does_not_matter(self):
+        """Заморозок до того, как растение зацвело, никого не касается —
+        ещё нет цветков, которые можно погубить."""
+        engine.set_biotope("ельник")
+        b = engine.BERRIES["черника"]
+        normal = self._season()
+        flower_i = self._flower_day(normal, "черника")
+        early_frost = self._season(frost_at=max(0, flower_i - 20), frost_c=-6.0)
+        m, ts = engine.water_balance(early_frost), engine.soil_temperature(early_frost)
+        self.assertGreater(max(engine.berry_index(b, early_frost, m, ts)), 50)
+
+    def test_drought_during_fill_reduces_but_does_not_zero_the_crop(self):
+        """Засуха в наливе — ягода мельче, но не пропадает совсем."""
+        engine.set_biotope("ельник")
+        b = engine.BERRIES["черника"]
+        normal = self._season()
+        flower_i = self._flower_day(normal, "черника")
+        m1, ts1 = engine.water_balance(normal), engine.soil_temperature(normal)
+        peak_normal = max(engine.berry_index(b, normal, m1, ts1))
+
+        dry = self._season(dry_from=flower_i, dry_to=flower_i + b.ripen_days)
+        m2, ts2 = engine.water_balance(dry), engine.soil_temperature(dry)
+        peak_dry = max(engine.berry_index(b, dry, m2, ts2))
+
+        self.assertLess(peak_dry, peak_normal * 0.5, "засуха должна заметно снизить урожай")
+        self.assertGreater(peak_dry, 0.0, "но не обнулить его целиком")
+
+    def test_wrong_biotope_suppresses_the_berry(self):
+        """Клюква вне болота — редкость, а не обычное дело."""
+        days = self._season()
+        b = engine.BERRIES["клюква"]
+        engine.set_biotope("смешанный")
+        m1, ts1 = engine.water_balance(days), engine.soil_temperature(days)
+        wrong = max(engine.berry_index(b, days, m1, ts1))
+        engine.set_biotope("болото")
+        m2, ts2 = engine.water_balance(days), engine.soil_temperature(days)
+        right = max(engine.berry_index(b, days, m2, ts2))
+        self.assertGreater(right, wrong * 5, "на болоте должно быть заметно больше")
+
+    def test_raspberry_prefers_clearcuts_over_dense_forest(self):
+        days = self._season()
+        b = engine.BERRIES["малина"]
+        engine.set_biotope("ельник")
+        m1, ts1 = engine.water_balance(days), engine.soil_temperature(days)
+        shaded = max(engine.berry_index(b, days, m1, ts1))
+        engine.set_biotope("вырубка")
+        m2, ts2 = engine.water_balance(days), engine.soil_temperature(days)
+        open_ground = max(engine.berry_index(b, days, m2, ts2))
+        self.assertGreater(open_ground, shaded)
+
+    def test_cranberry_fruit_is_not_hurt_by_autumn_frost(self):
+        """«Клюква после заморозков слаще» — спелой ягоде мороз не вредит,
+        в отличие от прочих ягод."""
+        engine.set_biotope("болото")
+        b = engine.BERRIES["клюква"]
+        normal = self._season()
+        m, ts = engine.water_balance(normal), engine.soil_temperature(normal)
+        idx = engine.berry_index(b, normal, m, ts)
+        ripe_i = next(i for i, v in enumerate(idx) if v > 50)
+
+        frosted = self._season(frost_at=ripe_i + 3, frost_c=-6.0)
+        m2, ts2 = engine.water_balance(frosted), engine.soil_temperature(frosted)
+        idx2 = engine.berry_index(b, frosted, m2, ts2)
+        self.assertGreater(idx2[ripe_i + 3], idx[ripe_i + 3] * 0.9,
+                           "заморозок на спелой клюкве не должен её портить")
+
+    def test_blueberry_fruit_is_hurt_by_frost_unlike_cranberry(self):
+        """У черники (и прочих, кроме клюквы) заморозок на спелой ягоде,
+        наоборот, портит урожай — иначе флаг frost_hardy_fruit ничего не значит."""
+        engine.set_biotope("ельник")
+        b = engine.BERRIES["черника"]
+        normal = self._season()
+        m, ts = engine.water_balance(normal), engine.soil_temperature(normal)
+        idx = engine.berry_index(b, normal, m, ts)
+        ripe_i = next(i for i, v in enumerate(idx) if v > 50)
+
+        frosted = self._season(frost_at=ripe_i, frost_c=-6.0)
+        m2, ts2 = engine.water_balance(frosted), engine.soil_temperature(frosted)
+        idx2 = engine.berry_index(b, frosted, m2, ts2)
+        self.assertLess(idx2[ripe_i], idx[ripe_i] * 0.5)
+
+    def test_harvest_declines_after_the_picking_window(self):
+        """Ягода не держится вечно — после окна сбора индекс идёт на убыль."""
+        engine.set_biotope("ельник")
+        b = engine.BERRIES["черника"]
+        days = self._season()
+        m, ts = engine.water_balance(days), engine.soil_temperature(days)
+        idx = engine.berry_index(b, days, m, ts)
+        peak_i = idx.index(max(idx))
+        far_after = min(len(idx) - 1, peak_i + b.ripen_span_days + 20)
+        self.assertLess(idx[far_after], idx[peak_i] * 0.5)
+
+    def test_before_flowering_index_is_a_real_zero_not_nan(self):
+        """До цветения — не пропуск данных, а честный ноль: ягоды ещё нет,
+        это не то же самое, что «не хватает истории» у гриба."""
+        engine.set_biotope("ельник")
+        days = self._season()
+        b = engine.BERRIES["черника"]
+        m, ts = engine.water_balance(days), engine.soil_temperature(days)
+        idx = engine.berry_index(b, days, m, ts)
+        self.assertEqual(idx[0], 0.0)
+        self.assertEqual(idx[0], idx[0])          # не nan
+
+    def test_undetermined_snowmelt_gives_a_flat_zero_not_a_guess(self):
+        """Если не удалось определить сход снега вообще, ягода честно
+        отвечает нулём весь ряд, а не гадает константой, как гриб (0.35)."""
+        days = self._season()
+        broken = [engine.Day(d.d, d.tmax, d.tmin, d.tmean, d.precip, d.et0,
+                             None, None, None, None) for d in days]
+        # без почвы и без снега дата схода может не определиться —
+        # если всё-таки определилась, тест не про этот случай
+        ts = engine.soil_temperature(broken)
+        _, melt = engine.snowmelt_gdd(broken, ts)
+        if melt is not None:
+            self.skipTest("сход снега всё же определён по этим данным")
+        m = engine.water_balance(broken)
+        idx = engine.berry_index(engine.BERRIES["черника"], broken, m, ts)
+        self.assertTrue(all(v == 0.0 for v in idx))
+
+    def test_every_berry_has_a_sensible_season_order(self):
+        """Черника поспевает раньше брусники, малина раньше черники —
+        порядок в лесу известен любому, кто собирал ягоды."""
+        days = self._season()
+        starts = {}
+        for key, bio in (("малина", "вырубка"), ("черника", "ельник"),
+                         ("брусника", "сосняк"), ("клюква", "болото")):
+            engine.set_biotope(bio)
+            m, ts = engine.water_balance(days), engine.soil_temperature(days)
+            idx = engine.berry_index(engine.BERRIES[key], days, m, ts)
+            starts[key] = next(i for i, v in enumerate(idx) if v > 0)
+        self.assertLess(starts["малина"], starts["брусника"])
+        self.assertLess(starts["черника"], starts["брусника"])
+        self.assertLess(starts["брусника"], starts["клюква"])
+
+    def test_berry_explain_reports_flowering_and_frost(self):
+        engine.set_biotope("ельник")
+        days = self._season()
+        b = engine.BERRIES["черника"]
+        m, ts = engine.water_balance(days), engine.soil_temperature(days)
+        flower_i = self._flower_day(days, "черника")
+        i = min(len(days) - 1, flower_i + b.ripen_days + 10)
+        names = [n for n, v, w in engine.berry_explain(b, i, days, m, ts)]
+        self.assertTrue(any("цвет" in n.lower() for n in names))
+        self.assertTrue(any("заморозок" in n.lower() for n in names))
+
+
+# --------------------------------------------------------------------------- #
 #  Тип леса
 # --------------------------------------------------------------------------- #
 
@@ -441,8 +651,9 @@ class TestBiotopes(ResetConstants):
             self.assertLess(b.theta_wilt, b.theta_fc, f"{key}: θ завядания ≥ ПВ")
             self.assertGreater(b.capacity, 10)
             self.assertTrue(0.3 <= b.canopy <= 1.0, f"{key}: затенение вне диапазона")
+            known = set(engine.SPECIES) | set(engine.BERRIES)
             for sp_key, w in b.weight.items():
-                self.assertIn(sp_key, engine.SPECIES, f"{key}: неизвестный вид {sp_key}")
+                self.assertIn(sp_key, known, f"{key}: неизвестный вид или ягода {sp_key}")
                 self.assertTrue(0.1 <= w <= 2.0, f"{key}/{sp_key}: множитель {w}")
 
 

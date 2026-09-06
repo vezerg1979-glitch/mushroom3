@@ -100,12 +100,25 @@ def test_unknown_saved_choice_falls_back_to_the_reference_book():
 
     Подставленная вслепую строка оставила бы в списке подпись, которой ни
     в одном профиле нет, и прогноз считался бы неизвестно по чему.
+
+    Файл main.py требует Kivy и не импортируется в этом, намеренно
+    Kivy-свободном наборе тестов (см. заголовок файла) — поэтому здесь
+    проверяется исходный текст, а не поведение самого метода: то же самое
+    ограничение, что и раньше, просто без опоры на буквальную старую строку,
+    которая переставала совпадать при любой переформулировке кода.
     """
     import mushroom_forecast as engine
 
     src = _src("main.py")
     assert "engine.BIOTOPES.get" in src
-    assert "any(sp.name == name for sp in engine.SPECIES.values())" in src
+    # Раньше проверка знала только про грибы (SPECIES); когда в тот же
+    # список выбора добавились ягоды (BERRIES), откат для незнакомого имени
+    # обязан учитывать оба источника — иначе сохранённая ягода на новом
+    # запуске тихо слетала бы на «Все виды сезона».
+    saved_kind_src = src[src.index("_saved_kind"):]
+    saved_kind_src = saved_kind_src[:saved_kind_src.index("_on_biotope")]
+    assert "engine.SPECIES" in saved_kind_src
+    assert "engine.BERRIES" in saved_kind_src
     # Заодно убеждаемся, что значение по умолчанию в справочнике есть.
     assert "смешанный" in engine.BIOTOPES
 

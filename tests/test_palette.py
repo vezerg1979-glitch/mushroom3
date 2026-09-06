@@ -179,6 +179,38 @@ def test_species_colours_cover_the_engine():
     assert not missing, f"нет цвета для: {missing}"
 
 
+def test_berry_colours_cover_the_engine():
+    """То же самое правило для ягод — свой список, та же дыра возможна."""
+    import mushroom_forecast as engine
+    missing = [b.name for b in engine.BERRIES.values()
+              if b.name not in palette.SPECIES_DAY
+              or b.name not in palette.SPECIES_NIGHT]
+    assert not missing, f"нет цвета для ягод: {missing}"
+
+
+def test_berry_colours_are_distinct_from_mushroom_colours():
+    """Ягода не должна красться цветом гриба — иначе на графике их не
+    различить по легенде на глаз, только по подписи."""
+    import mushroom_forecast as engine
+    berry_colors = {palette.SPECIES_DAY[b.name] for b in engine.BERRIES.values()}
+    mushroom_colors = {palette.SPECIES_DAY[s.name] for s in engine.SPECIES.values()}
+    assert not (berry_colors & mushroom_colors)
+
+
+def test_berry_curves_are_readable_on_the_card():
+    """Тот же порог читаемости, что и у грибов, в обеих темах."""
+    import mushroom_forecast as engine
+    было = palette.current()
+    try:
+        for тема in ("день", "ночь"):
+            palette.use(тема)
+            for b in engine.BERRIES.values():
+                ratio = palette.contrast(palette.SPECIES[b.name], palette.CARD)
+                assert ratio >= 2.5, f"{тема}: {b.name} {ratio:.2f}"
+    finally:
+        palette.use(было)
+
+
 def test_no_hard_coded_colours_left_in_ui():
     """Цвет, выписанный в файле экрана, рано или поздно разойдётся с палитрой.
 
