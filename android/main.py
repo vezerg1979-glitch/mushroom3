@@ -402,6 +402,12 @@ class Result:
         self.ts = engine.soil_temperature(days)
         self.idx = {sp.name: engine.species_index(sp, days, self.m, self.ts)
                     for sp in engine.SPECIES.values()}
+        # Ягоды считаются отдельной функцией (фенология от цветения, а не
+        # отклик на дождь), но результат ложится в тот же self.idx — графику
+        # и списку выбора дальше неважно, гриб это или ягода, лишь бы у
+        # имени было число на каждый день.
+        self.idx.update({b.name: engine.berry_index(b, days, self.m, self.ts)
+                         for b in engine.BERRIES.values()})
         self.stamp = datetime.now()
         self.stale = None
 
@@ -411,8 +417,15 @@ class Result:
 
     def season_names(self):
         month = self.days[self.today].d.month
-        return [sp.name for sp in engine.SPECIES.values() if sp.months.get(month, 0) > 0] \
-            or [sp.name for sp in engine.SPECIES.values()]
+        mushrooms = [sp.name for sp in engine.SPECIES.values()
+                    if sp.months.get(month, 0) > 0] or \
+            [sp.name for sp in engine.SPECIES.values()]
+        # У ягоды нет календаря месяцев — срок решает фенология (когда
+        # зацвело плюс дни налива), а не таблица. Показывать её в списке
+        # круглый год не страшно: вне сезона расчёт и так честно даёт ноль,
+        # плоскую линию, а не выдумывает всплеск.
+        berries = [b.name for b in engine.BERRIES.values()]
+        return mushrooms + berries
 
     def best(self, i):
         return max((self.value(n, i), n) for n in self.season_names())
@@ -552,10 +565,13 @@ class MushroomApp(App):
         # buildozer.spec). Оставлена только полноэкранная реклама
         # myTarget — она закреплена версией без таких сюрпризов.
         # Полноэкранная реклама myTarget — не должна задержать готовность
-        # экрана. show_once() сам решает, показывать ли (не куплено «Без
-        # рекламы», ещё не показывали за этот запуск, есть Android) —
-        # здесь просто зовём и не ждём ответа.
-        Clock.schedule_once(lambda *_: interstitial.show_once(), 1.4)
+        # экрана. maybe_show() сам решает, показывать ли (не куплено «Без
+        # рекламы», прошло достаточно времени с прошлого показа, есть
+        # Android) — здесь просто зовём и не ждём ответа. Та же функция
+        # вызывается и дальше, при возврате с похода, закрытии журнала и
+        # так далее (см. ниже) — это первый из таких моментов, а не
+        # единственный.
+        Clock.schedule_once(lambda *_: interstitial.maybe_show(), 1.4)
         return root
 
     def _build_ui(self):
@@ -715,7 +731,8 @@ class MushroomApp(App):
                                font_size=sp(13), background_normal="",
                                background_color=CARD, color=INK,
                                values=["Все виды сезона"]
-                                      + [s.name for s in engine.SPECIES.values()])
+                                      + [s.name for s in engine.SPECIES.values()]
+                                      + [b.name for b in engine.BERRIES.values()])
         self.sp_kind.bind(text=self._on_kind)
         if self.sp_kind.text != self.ALL_KINDS:
             self.sel = self.sp_kind.text
@@ -954,7 +971,11 @@ class MushroomApp(App):
     def show_walk_journal(self):
         """Журнал походов: куда ходили, что нашли, снимки находок."""
         import walkjournal
-        walkjournal.show()
+        journal_popup = walkjournal.show()
+        # Реклама — при закрытии журнала, а не при открытии: открывая его,
+        # человек хочет увидеть свои походы, а не рекламное объявление
+        # раньше собственных записей.
+        journal_popup.bind(on_dismiss=lambda *_: interstitial.maybe_show())
 
     def start_walk(self):
         """Режим похода: запись маршрута, метки находок, счётчик метров."""
@@ -1023,10 +1044,19 @@ class MushroomApp(App):
             except Exception as e:                                # noqa: BLE001
                 rows += ["", f"[size=11sp][color=a8564f]Журнал: {markup.esc(e)}[/color][/size]"]
         self._sheet("Итоги похода", "\n".join(rows), 0.6)
+        # Поход — законченное дело: человек уже не в лесу, уже не за рулём,
+        # смотрит итоги на экране. Это подходящий момент показать рекламу —
+        # но после сводки, а не вместо неё: свои находки должны быть видны
+        # первым делом, а не закрыты объявлением поверх.
+        Clock.schedule_once(lambda *_: interstitial.maybe_show(), 0.8)
 
     def pick_place(self):
         """Карта: касание ставит метку, есть поиск и список сохранённых мест."""
-        PlacePicker(self.lat, self.lon, self._place_chosen).open()
+        picker = PlacePicker(self.lat, self.lon, self._place_chosen)
+        picker.open()
+        # Из этого окна можно скачать карту для леса и раскрасить её по
+        # погоде — оба дела законченные к моменту, когда окно закрывается.
+        picker.bind(on_dismiss=lambda *_: interstitial.maybe_show())
 
     def _place_chosen(self, lat, lon):
         self.lat, self.lon = lat, lon
@@ -1165,7 +1195,9 @@ class MushroomApp(App):
     @classmethod
     def _saved_kind(cls, saved: dict) -> str:
         name = saved.get("kind")
-        if name and any(sp.name == name for sp in engine.SPECIES.values()):
+        known = ({sp.name for sp in engine.SPECIES.values()}
+                | {b.name for b in engine.BERRIES.values()})
+        if name and name in known:
             return name
         return cls.ALL_KINDS
 
@@ -1310,12 +1342,19 @@ class MushroomApp(App):
         rows.append("")
         for n in sorted(r.season_names(), key=lambda n: -r.value(n, i))[:6]:
             rows.append(f"{n}: [b]{r.value(n, i):.0f}[/b] — {engine.level(r.value(n, i))}")
-        spec = next(x for x in engine.SPECIES.values()
-                    if x.name == (self.sel or r.best(i)[1]))
+        # «Лучший вид дня» теперь может оказаться ягодой — season_names()
+        # включает и то, и другое. Прежний поиск только по SPECIES падал бы
+        # с StopIteration в тот день, когда впереди оказалась черника.
+        name = self.sel or r.best(i)[1]
+        spec = next((x for x in engine.SPECIES.values() if x.name == name), None)
+        is_berry = spec is None
+        if is_berry:
+            spec = next(x for x in engine.BERRIES.values() if x.name == name)
         rows += ["", f"[b]Почему такой индекс — {spec.name.lower()}[/b]",
                  "[size=11sp]Индекс — произведение сомножителей;",
                  "самый короткий столбик и есть причина.[/size]", ""]
-        for nm, val, why in engine.explain(spec, i, r.days, r.m, r.ts):
+        explain_fn = engine.berry_explain if is_berry else engine.explain
+        for nm, val, why in explain_fn(spec, i, r.days, r.m, r.ts):
             filled = int(round(val * 10))
             rows.append(f"{nm}  [b]{val*100:.0f}%[/b]")
             # Полоска набрана длинными тире, а не блоками «▇»: блочных знаков
@@ -1325,8 +1364,11 @@ class MushroomApp(App):
             rows.append(f"[size=15sp][color=3e7d2c]{BAR * filled}[/color]"
                         f"[color=cfd4c8]{BAR * (10 - filled)}[/color][/size]")
             rows.append(f"[size=11sp][color=7b8272]{why}[/color][/size]")
-        rows += ["", "[i]" + engine.plain_summary(spec, i, r.days, r.m, r.ts,
-                                                  r.value(spec.name, i)) + "[/i]"]
+        rows += ["", "[i]" + (engine.berry_plain_summary(spec, i, r.days, r.m, r.ts,
+                                                          r.value(spec.name, i))
+                              if is_berry else
+                              engine.plain_summary(spec, i, r.days, r.m, r.ts,
+                                                   r.value(spec.name, i))) + "[/i]"]
         self._sheet(d.d.strftime("%d.%m.%Y"), "\n".join(rows), 0.82)
 
 
