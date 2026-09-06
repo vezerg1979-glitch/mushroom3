@@ -344,6 +344,113 @@ class TestSpring(ResetConstants):
         for a, b in zip(gdd, gdd[1:]):
             self.assertLessEqual(a, b + 1e-9, "накопленное тепло не может убывать")
 
+    # --------------------------------------------------------------------- #
+    #  Ложный сход снега вне сезона
+    # --------------------------------------------------------------------- #
+    #
+    # Настоящий баг: ягоду смотрят осенью, запрос везёт всего 31 сутки
+    # истории назад (PAST_DAYS) — реального мартовского схода в этом окне
+    # физически нет. Без проверки календаря разовое похолодание почвы в
+    # конце лета или лёгкая пороша, растаявшая за день, принимались за
+    # «сход снега» — и в карточке ягоды писалось «снег сошёл» сентябрьской
+    # датой. И то, и другое устроено ровно как настоящий мартовский сход
+    # с точки зрения обоих способов обнаружения, поэтому проверка должна
+    # стоять на самой найденной дате, а не на способе, которым её нашли.
+
+    def _september_window(self, cold_at=None, snow_at=None, today=date(2026, 9, 6)):
+        """31 сутки назад от «сегодня» плюс неделя вперёд — ровно то окно,
+        которое видит настоящий запрос прогноза, не мой прежний
+        220-суточный синтетический сезон для берри-тестов."""
+        start = today - timedelta(days=engine.PAST_DAYS)
+        n = engine.PAST_DAYS + 7
+        days = []
+        for i in range(n):
+            snow = 0.02 if snow_at is not None and i in snow_at else 0.0
+            days.append(engine.Day(start + timedelta(days=i), 15.0, 8.0, 12.0,
+                                   1.0, 2.5, 78.0, None, None, snow))
+        return days
+
+    def test_autumn_soil_cold_snap_is_not_mistaken_for_snowmelt(self):
+        """Ровно тот сценарий, который дошёл до человека: разовое похолодание
+        почвы в конце лета — не сход снега, даже когда переход через 0.5°
+        формально есть."""
+        days = self._september_window()
+        ts = [12.0] * len(days)
+        ts[10], ts[11], ts[12] = 0.3, 1.0, 1.2   # похолодание почвы, не снег
+        gdd, melt = engine.snowmelt_gdd(days, ts)
+        self.assertIsNone(melt, f"сентябрьское похолодание принято за сход снега: {melt}")
+        self.assertTrue(all(v == 0.0 for v in gdd))
+
+    def test_early_autumn_flurry_that_melts_in_a_day_is_not_spring(self):
+        """Настоящий снег, который выпал и растаял за сутки в сентябре, —
+        такое бывает, и это тоже не сход снега в ботаническом смысле."""
+        days = self._september_window(snow_at={10, 11})
+        ts = engine.soil_temperature(days)
+        gdd, melt = engine.snowmelt_gdd(days, ts)
+        self.assertIsNone(melt, f"осенняя пороша принята за сход снега: {melt}")
+
+    def test_real_spring_still_detected_after_the_calendar_guard(self):
+        """Проверка не должна задеть настоящую весну — только придуманную."""
+        days = self._spring(melt_day=24)
+        ts = engine.soil_temperature(days)
+        gdd, melt = engine.snowmelt_gdd(days, ts)
+        self.assertIsNotNone(melt)
+        self.assertEqual(melt.month, 3)
+
+    def test_melt_outside_the_plausible_months_is_rejected_by_month(self):
+        """Граница проверяется впрямую — по месяцу найденной даты,
+        а не только на конкретном сценарии похолодания."""
+        for month in (8, 9, 10, 11, 12, 1):
+            self.assertNotIn(month, engine.MELT_MONTHS)
+        for month in (3, 4, 5, 6):
+            self.assertIn(month, engine.MELT_MONTHS)
+
+    def test_no_snow_anywhere_in_the_window_is_honestly_unknown(self):
+        """Более глубокая версия того же бага: снега нет НИГДЕ в окне —
+        значит, сошёл ещё до его начала, а не «прямо в первый день окна».
+
+        Раньше здесь стояла заглушка melt_i = 0, которая тихо подставляла
+        начало окна вместо настоящей даты — и с каждой следующей проверкой
+        позже по сезону эта дата ползла вперёд вместе с окном, унося за
+        собой и накопленное тепло. Для ягоды, которую смотрят всё лето и
+        осень, к июлю это давало не просто неточность, а систематически
+        заниженное накопленное тепло — потому что «сход» отсчитывался от
+        месяца, в котором никакого схода не было.
+        """
+        real_melt = date(2026, 4, 5)
+        check = date(2026, 6, 15)                     # больше, чем на месяц позже
+        start = check - timedelta(days=engine.PAST_DAYS)
+        n = engine.PAST_DAYS + 7
+        days = []
+        for i in range(n):
+            d = start + timedelta(days=i)
+            since = (d - real_melt).days
+            t = -3.0 if since < 0 else min(20.0, 4.0 + 0.12 * since)
+            days.append(engine.Day(d, t + 5, t - 5, t, 1.0, 2.5, 78.0, None, None,
+                                   0.3 if since < 0 else 0.0))
+        ts = engine.soil_temperature(days)
+        gdd, melt = engine.snowmelt_gdd(days, ts)
+        self.assertIsNone(melt, f"вместо честного «неизвестно» получена дата {melt}")
+        self.assertTrue(all(v == 0.0 for v in gdd))
+
+    def test_melt_within_the_window_is_still_found_precisely(self):
+        """Тот же сценарий, но окно захватывает настоящий сход, — тогда
+        находится он, а не подмена."""
+        real_melt = date(2026, 4, 5)
+        check = date(2026, 4, 20)                      # сход внутри последних 31 суток
+        start = check - timedelta(days=engine.PAST_DAYS)
+        n = engine.PAST_DAYS + 7
+        days = []
+        for i in range(n):
+            d = start + timedelta(days=i)
+            since = (d - real_melt).days
+            t = -3.0 if since < 0 else min(20.0, 4.0 + 0.12 * since)
+            days.append(engine.Day(d, t + 5, t - 5, t, 1.0, 2.5, 78.0, None, None,
+                                   0.3 if since < 0 else 0.0))
+        ts = engine.soil_temperature(days)
+        gdd, melt = engine.snowmelt_gdd(days, ts)
+        self.assertEqual(melt, real_melt)
+
     def test_gyromitra_before_morchella(self):
         """Строчок идёт раньше сморчка — на меньшем накопленном тепле."""
         days = self._spring()
