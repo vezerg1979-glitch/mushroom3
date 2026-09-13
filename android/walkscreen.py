@@ -1063,7 +1063,8 @@ class WalkScreen(Popup):
         head = (f"Состояние: {'работает' if tracklog.service_alive() else 'не отвечает'}\n"
                 f"Источник: {st.get('source', '—')}\n"
                 f"Точек записано: {st.get('points', 0)}\n"
-                f"Провайдеры: {st.get('providers', '—')}\n")
+                f"Провайдеры: {st.get('providers', '—')}\n"
+                f"Процессор: {'удержан' if st.get('awake') else 'не удержан'}\n")
         if st.get("error"):
             head += f"Ошибка: {st['error']}\n"
         head += (f"Компас: {self._compass.kind or 'выключен'}"

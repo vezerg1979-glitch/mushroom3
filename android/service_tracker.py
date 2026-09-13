@@ -44,6 +44,7 @@ for _candidate in (os.environ.get("PYTHON_SERVICE_ARGUMENT"),
         continue
 
 import tracklog
+import wakelock
 
 POLL_SECONDS = 5.0
 # Фильтр по расстоянию отдан приёмнику нулём намеренно. Раньше здесь стояло
@@ -66,8 +67,21 @@ def _run():
     LocationManager = autoclass("android.location.LocationManager")
     Looper = autoclass("android.os.Looper")
 
+    if tracklog.get_status().get("stop"):
+        # Перезапуск после штатной остановки: система подняла сервис заново
+        # по флагу sticky, а писать уже нечего.
+        tracklog.log("запуск после штатной остановки — выхожу")
+        tracklog.set_status(running=False, stop=False)
+        return
+
     lm = service.getSystemService(Context.LOCATION_SERVICE)
     tracklog.log(f"сервис запущен, каталог данных {places_mod.data_dir()}")
+
+    # Процессор нельзя отпускать: в глубоком сне обработчик координат не
+    # вызывается, и запись встаёт, хотя сервис жив. Подробности в wakelock.py.
+    lock = wakelock.WakeLock()
+    lock.acquire()
+    tracklog.log(f"удержание процессора: {lock.status()}")
 
     state = {"last": 0.0, "count": 0}
 
@@ -131,6 +145,7 @@ def _run():
             tracklog.log(f"не удалось подписаться на {name}: {e}")
 
     if not providers:
+        lock.release()
         # Самая частая причина — не разрешение, а его отсутствие: диалог
         # показывается асинхронно, и сервис успевает стартовать раньше, чем
         # человек нажал «Разрешить». Сервис спросить разрешение не может,
@@ -165,17 +180,28 @@ def _run():
         if time.time() - started > IDLE_TIMEOUT:
             tracklog.log("превышен предельный срок записи")
             break
+        # Лок мог истечь по таймауту или быть снят системой — перезабираем.
+        if not lock.refresh():
+            tracklog.log(f"процессор не удержан: {lock.error}")
+
         # поддерживаем отметку живости, даже когда точек нет
-        tracklog.set_status(running=True, points=state["count"], source="сервис")
-        if state["last"] and time.time() - state["last"] > 300:
-            tracklog.log("координат нет более пяти минут")
+        tracklog.set_status(running=True, points=state["count"],
+                            source="сервис", awake=lock.held)
+        silence = time.time() - state["last"] if state["last"] else 0.0
+        if silence > 300 and not state.get("warned"):
+            tracklog.log(f"координат нет {silence / 60:.0f} мин "
+                         f"(процессор: {lock.status()})")
+            state["warned"] = True
+        elif silence < 60:
+            state["warned"] = False
 
     try:
         lm.removeUpdates(listener)
     except Exception:                                             # noqa: BLE001
         pass
-    tracklog.set_status(running=False, stop=False)
-    tracklog.log("сервис остановлен")
+    lock.release()
+    tracklog.set_status(running=False, stop=False, awake=False)
+    tracklog.log("сервис остановлен, процессор отпущен")
 
 
 if __name__ == "__main__":

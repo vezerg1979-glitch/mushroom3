@@ -7,7 +7,7 @@ package.domain = ru.grezev
 source.dir = .
 source.include_exts = py,png,jpg,ttf,json
 
-version = 3.11
+version = 3.12
 
 # Ветку p4a обязательно держать закреплённой: на develop собирается
 # Python 3.14, под который не подходят колёса, и сборка обрывается
@@ -58,7 +58,10 @@ android.enable_androidx = True
 # Фоновая запись трека. Имя до двоеточия задаёт Java-класс:
 # Tracker -> ru.grezev.mushroomforecast.ServiceTracker, именно его ищет
 # service_ctl.py. Без этой строки класса в APK нет и сервис не стартует.
-services = Tracker:service_tracker.py:foreground
+# :sticky — если система всё же убьёт процесс (глубокий сон, нехватка памяти,
+# «оптимизация» производителя), Android поднимет сервис заново. Запись при
+# этом продолжается: файл трека дописывается, а не начинается с нуля.
+services = Tracker:service_tracker.py:foreground:sticky
 
 # Поворот разрешён. В лесу телефон держат стоймя, но карту похода на боку
 # видно вдвое шире, а на планшете портретная раскладка растягивает кнопки на
@@ -76,7 +79,7 @@ android.presplash_color = #171A1F
 
 # Числовой код версии. Магазин требует, чтобы он рос с каждой загрузкой,
 # иначе новая сборка не принимается. Формат: 2.7 -> 20700, 2.7.1 -> 20701.
-android.numeric_version = 31100
+android.numeric_version = 31200
 
 # POST_NOTIFICATIONS добавлено для Android 13+: без него уведомление
 # переднего плана не показывается, и сервис выглядит «мёртвым».
