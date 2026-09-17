@@ -44,12 +44,25 @@ def _src(name):
         return f.read()
 
 
+def _method_body(src: str, name: str) -> str:
+    """Тело метода целиком — от его def до следующего на том же отступе.
+
+    Срез фиксированной длины здесь уже подводил: метод вырос, проверяемая
+    строка уехала за границу окна, и тест упал, хотя экранирование никуда
+    не делось. Отступ надёжнее числа символов.
+    """
+    i = src.index(f"def {name}")
+    tail = src[i:]
+    end = tail.find("\n    def ", 1)
+    return tail if end < 0 else tail[:end]
+
+
 def test_crash_dialog_escapes_the_traceback():
-    src = _src("main.py")
-    i = src.index("def handle_exception")
-    body = src[i:i + 1200]
+    """Трассировка едет в разметку и содержит скобки: без экранирования
+    окно с ошибкой падает само, не оставляя человеку ни причины, ни выхода."""
+    body = _method_body(_src("main.py"), "handle_exception")
     assert "markup.esc(tb)" in body
-    assert "markup.esc(self._headline(tb))" in body
+    assert "markup.esc(head_raw)" in body or "markup.esc(self._headline(tb))" in body
 
 
 def test_place_name_is_escaped_where_it_meets_markup():
