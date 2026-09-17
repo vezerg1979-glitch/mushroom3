@@ -697,7 +697,22 @@ class WalkScreen(Popup):
         self.feed(float(lat), float(lon), float(acc or 0.0))
 
     def _pump(self):
-        """Раз в секунду: забираем точки сервиса и обновляем счётчики."""
+        """Раз в секунду: забираем точки сервиса и обновляем счётчики.
+
+        Обёрнут целиком. Исключение здесь повторяется каждую секунду, и без
+        перехвата оно уходит в общий обработчик, который открывает окно —
+        стопка модальных окон перехватывает касания, и кнопки «перестают
+        работать». Записать в протокол и жить дальше полезнее: поход важнее
+        любой ошибки в счётчике.
+        """
+        try:
+            self._pump_once()
+        except Exception as e:                                    # noqa: BLE001
+            self._pump_fails = getattr(self, "_pump_fails", 0) + 1
+            if self._pump_fails in (1, 10, 100):
+                tracklog.log(f"сбой такта записи ({self._pump_fails}): {e}")
+
+    def _pump_once(self):
         self._poll_if_silent()
         if self._service:
             self._drain()
@@ -1057,6 +1072,29 @@ class WalkScreen(Popup):
             self.hint.text = (f"До заката {mins} мин. В лесу темнеет раньше — "
                               f"пора выходить к машине.")
 
+    def _ui_health(self) -> str:
+        """Строка о здоровье самого интерфейса.
+
+        Нужна после случая, когда кнопки перестали нажиматься: по числу
+        пойманных ошибок и залипших касаний сразу видно, в чём дело, —
+        иначе остаётся гадать по фотографии экрана.
+        """
+        parts = []
+        try:
+            import main as app_main
+            n = getattr(app_main._Catcher, "count", 0)
+            if n:
+                parts.append(f"ошибок поймано: {n}")
+        except Exception:                                         # noqa: BLE001
+            pass
+        stuck = len(getattr(self.map, "_touches", {}) or {})
+        if stuck:
+            parts.append(f"касаний в учёте карты: {stuck}")
+        fails = getattr(self, "_pump_fails", 0)
+        if fails:
+            parts.append(f"сбоев такта: {fails}")
+        return ("Интерфейс: " + ", ".join(parts) + "\n") if parts else ""
+
     def show_service_log(self):
         """Диагностика: что именно происходит с фоновой записью."""
         st = tracklog.get_status()
@@ -1064,7 +1102,8 @@ class WalkScreen(Popup):
                 f"Источник: {st.get('source', '—')}\n"
                 f"Точек записано: {st.get('points', 0)}\n"
                 f"Провайдеры: {st.get('providers', '—')}\n"
-                f"Процессор: {'удержан' if st.get('awake') else 'не удержан'}\n")
+                f"Процессор: {'удержан' if st.get('awake') else 'не удержан'}\n"
+                f"{self._ui_health()}")
         if st.get("error"):
             head += f"Ошибка: {st['error']}\n"
         head += (f"Компас: {self._compass.kind or 'выключен'}"

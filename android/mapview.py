@@ -16,6 +16,7 @@ kivy_garden.mapview тянет requests и свой рецепт сборки, �
 from __future__ import annotations
 
 import math
+import time
 import os
 import threading
 import weakref
@@ -263,11 +264,13 @@ class TileMap(Widget):
     def on_touch_down(self, touch):
         if not self.collide_point(*touch.pos):
             return False
+        self._drop_stale()
         self._touches[touch.uid] = touch.pos
         self._moved = False
         if len(self._touches) == 2:
             a, b = list(self._touches.values())
             self._pinch = math.dist(a, b)
+        self._mark_seen(touch)
         touch.grab(self)
         return True
 
@@ -275,6 +278,7 @@ class TileMap(Widget):
         if touch.grab_current is not self:
             return False
         self._touches[touch.uid] = touch.pos
+        self._mark_seen(touch)
         if len(self._touches) >= 2:
             a, b = list(self._touches.values())[:2]
             d = math.dist(a, b)
@@ -292,6 +296,11 @@ class TileMap(Widget):
 
     def on_touch_up(self, touch):
         if touch.grab_current is not self:
+            # Обычный проход диспетчера: захват уже снят в проходе для
+            # захваченных. Но uid из своего учёта убираем в любом случае —
+            # ситуацию, когда «отпустили» приходит только этим путём,
+            # дешевле пережить, чем потом искать залипшее касание.
+            self._touches.pop(touch.uid, None)
             return False
         touch.ungrab(self)
         self._touches.pop(touch.uid, None)
@@ -309,6 +318,36 @@ class TileMap(Widget):
                 self.set_marker(*self._latlon(*touch.pos))
         return True
 
+    #: Касание старше этого срока — точно потерянное: палец столько не держат
+    #: неподвижно, а событие «отпустили» приходит за миллисекунды.
+    STALE_S = 8.0
+
+    def _drop_stale(self):
+        """Снимает касания, по которым давно не было событий.
+
+        Экран, гаснущий во время перетаскивания, — не единственный способ
+        потерять «отпустили»: то же даёт исключение внутри обработчика и
+        модальное окно, открытое пальцем, ещё лежащим на карте. Проверка
+        перед каждым новым касанием стоит доли микросекунды, а лечит целый
+        класс отказов, при которых одиночный тап принимается за пинч-зум.
+        """
+        now = time.time()
+        if not self._touches:
+            self._touch_seen = {}
+            return
+        seen = getattr(self, "_touch_seen", {})
+        for uid in list(self._touches):
+            if now - seen.get(uid, now) > self.STALE_S:
+                self._touches.pop(uid, None)
+                seen.pop(uid, None)
+                self._pinch = None
+        self._touch_seen = seen
+
+    def _mark_seen(self, touch):
+        seen = getattr(self, "_touch_seen", {})
+        seen[touch.uid] = time.time()
+        self._touch_seen = seen
+
     def reset_touches(self):
         """Сбрасывает своё перетаскивание/пинч-зум — не через on_touch_up.
 
@@ -324,6 +363,7 @@ class TileMap(Widget):
         main.py.
         """
         self._touches.clear()
+        self._touch_seen = {}
         self._pinch = None
         self._moved = False
 

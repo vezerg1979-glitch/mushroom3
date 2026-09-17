@@ -13,6 +13,7 @@ import math
 import os
 import ssl
 import threading
+import time
 import weakref
 import traceback
 from datetime import datetime
@@ -62,6 +63,7 @@ from kivy.uix.widget import Widget
 from kivy.utils import get_color_from_hex as hexc
 
 import interstitial
+import tracklog
 import premium
 import premium_screen
 import icons
@@ -439,9 +441,31 @@ class Result:
 # --------------------------------------------------------------------------- #
 
 class _Catcher(ExceptionHandler):
-    """Ошибка в обработчике события не должна закрывать приложение."""
+    """Ошибка в обработчике события не должна закрывать приложение.
+
+    Показ окна с ошибкой намеренно ограничен. Исключение в такте, который
+    идёт раз в секунду, за минуту породит шесть десятков модальных окон:
+    каждое перехватывает касания, и человек видит «кнопки перестали
+    работать», хотя приложение живо. Хуже, если окно не успело построиться:
+    оно уже добавлено к Window и забирает касания, но на экране его нет.
+
+    Поэтому: одно окно за раз, повтор той же ошибки молчит SILENCE секунд,
+    и в любом случае всё пишется в протокол — он виден в «Приём и сервис».
+    """
 
     app = None
+
+    #: Открыто ли сейчас окно с ошибкой.
+    _showing = False
+
+    #: Последняя показанная ошибка и когда: против повторов.
+    _last = ("", 0.0)
+
+    #: Сколько всего поймано за сеанс — строка в диагностике.
+    count = 0
+
+    #: Не повторять одну и ту же ошибку чаще, секунды.
+    SILENCE = 60.0
 
     @staticmethod
     def _headline(tb: str) -> str:
@@ -464,23 +488,48 @@ class _Catcher(ExceptionHandler):
                 break
         return "\n".join(out)
 
+    @classmethod
+    def _released(cls, *_):
+        cls._showing = False
+
     def handle_exception(self, inst):
         tb = traceback.format_exc()
         path = _log_crash(tb)
+        type(self).count += 1
+        head_raw = self._headline(tb)
+        now = time.time()
+        same, when = type(self)._last
+        # Окно уже висит или ту же ошибку только что показывали — молчим.
+        # Протокол уже записан, разбираться будем по нему.
+        if type(self)._showing or (head_raw == same and now - when < self.SILENCE):
+            try:
+                tracklog.log(f"ошибка (подавлен показ, всего {type(self).count}): "
+                             f"{head_raw.splitlines()[0][:120]}")
+            except Exception:                                     # noqa: BLE001
+                pass
+            return ExceptionManager.PASS
+        type(self)._last = (head_raw, now)
         if self.app is not None:
             try:
                 # Текст исключения экранируется: в нём бывают скобки, а
                 # окно, которое падает, показывая ошибку, не оставляет
                 # человеку ни причины, ни возможности её снять.
-                head = markup.esc(self._headline(tb))
-                self.app._sheet(
+                type(self)._showing = True
+                head = markup.esc(head_raw)
+                popup = self.app._sheet(
                     "Ошибка",
                     f"[b]{head}[/b]\n"
                     f"[size=10sp][color=5C6353]Протокол: {markup.esc(path)}"
                     f"[/color][/size]\n\n"
                     f"[size=11sp]{markup.esc(tb)}[/size]", 0.8)
+                # Окно могло не построиться: тогда снимаем запрет сразу,
+                # иначе об ошибках больше не узнаем никогда.
+                if popup is None:
+                    type(self)._showing = False
+                else:
+                    popup.bind(on_dismiss=type(self)._released)
             except Exception:                                     # noqa: BLE001
-                pass
+                type(self)._showing = False
         return ExceptionManager.PASS
 
 
@@ -1308,8 +1357,10 @@ class MushroomApp(App):
                  texture_size=lambda w, t: setattr(w, "height", t[1] + dp(20)))
         sv.add_widget(lbl)
         box.add_widget(sv)
-        Popup(title=title, content=box, size_hint=(0.94, height),
-              separator_color=ACCENT, title_size=sp(15)).open()
+        popup = Popup(title=title, content=box, size_hint=(0.94, height),
+                      separator_color=ACCENT, title_size=sp(15))
+        popup.open()
+        return popup                      # нужен обработчику ошибок: см. _Catcher
 
     def show_help(self):
         self._sheet("Как работает прогноз", HELP)

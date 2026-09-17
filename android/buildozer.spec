@@ -7,7 +7,7 @@ package.domain = ru.grezev
 source.dir = .
 source.include_exts = py,png,jpg,ttf,json
 
-version = 3.12
+version = 3.13
 
 # Ветку p4a обязательно держать закреплённой: на develop собирается
 # Python 3.14, под который не подходят колёса, и сборка обрывается
@@ -79,7 +79,7 @@ android.presplash_color = #171A1F
 
 # Числовой код версии. Магазин требует, чтобы он рос с каждой загрузкой,
 # иначе новая сборка не принимается. Формат: 2.7 -> 20700, 2.7.1 -> 20701.
-android.numeric_version = 31200
+android.numeric_version = 31300
 
 # POST_NOTIFICATIONS добавлено для Android 13+: без него уведомление
 # переднего плана не показывается, и сервис выглядит «мёртвым».
