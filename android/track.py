@@ -19,7 +19,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 import places as places_mod
 
@@ -451,7 +451,7 @@ def gpx_escape(text: str) -> str:
 def to_gpx(walk: Walk) -> str:
     """Выгрузка в GPX: открывается в OsmAnd, Garmin, любом навигаторе."""
     def iso(t):
-        return datetime.utcfromtimestamp(t).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     parts = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<gpx version="1.1" creator="mushroom-forecast" '
