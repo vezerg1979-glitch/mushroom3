@@ -1,3 +1,4 @@
+from pathlib import Path
 # -*- coding: utf-8 -*-
 """Тесты упаковки APK.
 
@@ -295,3 +296,14 @@ def test_ui_modules_are_not_imported_at_test_top_level():
                 if m and m.group(2) in heavy:
                     bad.append(f"{name}:{num}: {line.strip()}")
     assert not bad, f"модуль с виджетами импортируется на верхнем уровне: {bad}"
+
+
+def test_desktop_and_android_forecast_core_are_identical():
+    """Не даём двум копиям расчётного ядра снова незаметно разъехаться."""
+    root = Path(__file__).resolve().parents[1]
+    desktop = (root / "desktop" / "mushroom_forecast.py").read_bytes()
+    android = (root / "android" / "mushroom_forecast.py").read_bytes()
+    assert desktop == android, (
+        "desktop/android mushroom_forecast.py разошлись; "
+        "изменение расчётного ядра нужно синхронизировать в обеих сборках"
+    )

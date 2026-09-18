@@ -1275,10 +1275,15 @@ class MainWindow(QMainWindow):
         spec = next(s for s in engine.SPECIES.values()
                     if s.name == self.cb_species.currentText())
         v = r.value(spec.name, i)
+        conf_label, conf_score, conf_why = engine.confidence(spec, i, r.days, r.m, r.ts)
+        window = engine.window_text(r.idx[spec.name], r.days, i)
         self.why_head.setText(
             f"<b>{spec.name}, {r.days[i].d.strftime('%d.%m.%Y')}: "
             f"{v:.0f} из 100 — {engine.level(v)}.</b><br>"
-            + engine.plain_summary(spec, i, r.days, r.m, r.ts, v))
+            + engine.plain_summary(spec, i, r.days, r.m, r.ts, v)
+            + f"<br><b>Устойчивость оценки: {conf_label} ({conf_score}/100).</b> "
+              f"{conf_why}. Это не вероятность находки, а согласованность факторов."
+            + f"<br>{window}")
         self.bars.set_rows(engine.explain(spec, i, r.days, r.m, r.ts))
 
     def _fill_days(self, r: Result, names: list[str]):

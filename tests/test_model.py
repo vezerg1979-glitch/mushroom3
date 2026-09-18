@@ -1576,3 +1576,33 @@ class TestGeometryAndReports(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+class TestForecastInterpretation(unittest.TestCase):
+    def test_forecast_window_finds_contiguous_band(self):
+        from datetime import date, timedelta
+        vals = [10, 20, 35, 50, 42, 20, 60]
+        days = [engine.Day(date(2026, 9, 1) + timedelta(days=i), 10, 20, 15, 0, 0, 0, 0)
+                for i in range(len(vals))]
+        self.assertEqual(engine.forecast_window(vals, days, 0), (2, 4))
+        txt = engine.window_text(vals, days, 0)
+        self.assertIn("03.09–05.09", txt)
+        self.assertIn("04.09", txt)
+
+    def test_forecast_window_handles_no_band_and_nan(self):
+        from datetime import date, timedelta
+        vals = [float("nan"), 10, 20]
+        days = [engine.Day(date(2026, 9, 1) + timedelta(days=i), 10, 20, 15, 0, 0, 0, 0)
+                for i in range(3)]
+        self.assertIsNone(engine.forecast_window(vals, days, 0))
+        self.assertIn("не видно", engine.window_text(vals, days, 0))
+
+    def test_confidence_is_bounded_and_labelled(self):
+        sp = engine.SPECIES["белый"]
+        days = make_days(50, lambda j: 12.0 if j in (20, 21, 34) else 0.0, lambda j: 16.0)
+        m, ts = engine.water_balance(days), engine.soil_temperature(days)
+        i = 40
+        label, score, why = engine.confidence(sp, i, days, m, ts)
+        self.assertIn(label, {"низкая", "средняя", "высокая"})
+        self.assertGreaterEqual(score, 0)
+        self.assertLessEqual(score, 100)
+        self.assertTrue(why)

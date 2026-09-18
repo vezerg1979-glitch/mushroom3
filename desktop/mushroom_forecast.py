@@ -34,7 +34,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "2.9"
+VERSION = "3.15"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -348,10 +348,10 @@ SNOW_GONE = 0.02                 # ниже этого считаем, что с
 GDD_BASE = 5.0                   # база для накопления тепла после схода снега
 
 
-def _get_json(url: str, params: dict) -> dict:
+def _get_json(url: str, params: dict, timeout: int = 25) -> dict:
     full = url + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(full, headers={"User-Agent": "mushroom-forecast/1.0"})
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -557,35 +557,24 @@ def _daily_mean(times: list[str], values: list) -> dict[date, float]:
     return {d: sum(vs) / len(vs) for d, vs in acc.items() if vs}
 
 
-def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
-    daily = ["temperature_2m_max", "temperature_2m_min", "temperature_2m_mean",
-             "precipitation_sum", "et0_fao_evapotranspiration", "relative_humidity_2m_mean"]
-    base = {
-        "latitude": place.lat, "longitude": place.lon,
-        "timezone": "auto",
-        "past_days": PAST_DAYS, "forecast_days": max(3, min(16, forecast_days)),
-    }
+#: Общий набор суточных переменных. Вынесен в константу модуля — тем же
+#: списком пользуется heatgrid при пакетном запросе на сетку клеток: если
+#: набор здесь поменяется, там он должен поменяться сам, а не разъехаться.
+DAILY_VARS = ["temperature_2m_max", "temperature_2m_min", "temperature_2m_mean",
+              "precipitation_sum", "et0_fao_evapotranspiration",
+              "relative_humidity_2m_mean"]
 
-    data, soil_keys, has_snow = None, None, False
-    for t_key, w_key in SOIL_CANDIDATES:
-        for extra in (f",{SNOW_KEY}", ""):
-            params = dict(base, daily=",".join(daily),
-                          hourly=f"{t_key},{w_key}{extra}")
-            try:
-                data = _get_json(FORECAST_URL, params)
-                soil_keys, has_snow = (t_key, w_key), bool(extra)
-                break
-            except urllib.error.HTTPError:
-                continue
-        if data is not None:
-            break
-    if data is None:
-        # ни один набор слоёв не поддержан — работаем на суточных данных
-        try:
-            data = _get_json(FORECAST_URL, dict(base, daily=",".join(daily)))
-        except urllib.error.HTTPError:
-            data = _get_json(FORECAST_URL, dict(base, daily=",".join(daily[:-1])))
 
+def _parse_daily_blob(data: dict, soil_keys: tuple | None,
+                      has_snow: bool) -> list[Day]:
+    """JSON-ответ Open-Meteo на ОДНУ точку -> список Day.
+
+    Отдельная функция ровно ради heatgrid: там та же самая распаковка
+    нужна на каждую клетку сетки, и держать её в двух местах — значит
+    однажды поправить одно и забыть другое. `fetch_weather` ниже и
+    heatfetch и пользуются этой функцией, разница только в том, как
+    получен сам `data`: одним запросом или как часть пакетного.
+    """
     soil_t_map: dict[date, float] = {}
     soil_w_map: dict[date, float] = {}
     snow_map: dict[date, float] = {}
@@ -612,6 +601,68 @@ def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
                        None if rh is None else float(rh),
                        soil_t_map.get(d), soil_w_map.get(d), snow_map.get(d)))
     return out
+
+
+def probe_soil_keys(lat: float, lon: float, forecast_days: int):
+    """Перебирает наборы почвенных слоёв для ОДНОЙ точки и возвращает
+    (soil_keys, has_snow, данные_этой_точки) — тот набор, который сервер
+    принял.
+
+    Вынесено из fetch_weather ради heatgrid: там перебор делается один раз
+    для центра сетки, а не на каждую из тридцати шести клеток — сервис,
+    поддерживающий слои почвы в одном месте области, почти наверняка
+    поддерживает их и в соседних, и тратить на это отдельный перебор на
+    каждую клетку — это лишние секунды и лишний трафик без всякой пользы.
+    """
+    daily = ",".join(DAILY_VARS)
+    base = {"latitude": lat, "longitude": lon, "timezone": "auto",
+            "past_days": PAST_DAYS, "forecast_days": max(3, min(16, forecast_days))}
+    for t_key, w_key in SOIL_CANDIDATES:
+        for extra in (f",{SNOW_KEY}", ""):
+            params = dict(base, daily=daily, hourly=f"{t_key},{w_key}{extra}")
+            try:
+                data = _get_json(FORECAST_URL, params)
+                return (t_key, w_key), bool(extra), data
+            except urllib.error.HTTPError:
+                continue
+    # ни один набор не поддержан — суточные данные без слоёв почвы
+    try:
+        data = _get_json(FORECAST_URL, dict(base, daily=daily))
+    except urllib.error.HTTPError:
+        data = _get_json(FORECAST_URL, dict(base, daily=",".join(DAILY_VARS[:-1])))
+    return None, False, data
+
+
+def fetch_weather_with_keys(lat: float, lon: float, forecast_days: int,
+                            soil_keys, has_snow: bool) -> list[Day]:
+    """Один запрос по уже известному набору слоёв почвы — без перебора.
+
+    Перебор (probe_soil_keys) стоит делать один раз на область, не на
+    каждую точку: сервис, поддерживающий слои почвы у одной точки,
+    поддерживает их и у соседних. Эта функция — тот самый «уже знаем,
+    что просить» путь, которым пользуется heatfetch на резервном ходе, и
+    которым может пользоваться что угодно ещё, где soil_keys уже известны.
+    """
+    daily = ",".join(DAILY_VARS)
+    params = {"latitude": lat, "longitude": lon, "timezone": "auto",
+             "past_days": PAST_DAYS,
+             "forecast_days": max(3, min(16, forecast_days)), "daily": daily}
+    if soil_keys:
+        extra = f",{SNOW_KEY}" if has_snow else ""
+        params["hourly"] = f"{soil_keys[0]},{soil_keys[1]}{extra}"
+    try:
+        data = _get_json(FORECAST_URL, params)
+    except urllib.error.HTTPError:
+        # Ключи, годные для соседей, для этой конкретной точки почему-то не
+        # подошли — редко, но не исключено на границе покрытия. Тогда всё
+        # же пробуем подобрать заново, только для нее одной.
+        soil_keys, has_snow, data = probe_soil_keys(lat, lon, forecast_days)
+    return _parse_daily_blob(data, soil_keys, has_snow)
+
+
+def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
+    soil_keys, has_snow, data = probe_soil_keys(place.lat, place.lon, forecast_days)
+    return _parse_daily_blob(data, soil_keys, has_snow)
 
 
 def demo_weather(forecast_days: int, seed: int = 7) -> tuple[Place, list[Day]]:
@@ -1005,6 +1056,74 @@ def berry_plain_summary(b: Berry, i: int, days: list[Day], m: list[float],
         parts.append("В минус: " + "; ".join(bad) + ".")
     return " ".join(parts)
 
+
+
+def forecast_window(values: list[float], days: list[Day], i: int,
+                    threshold: float = 33.0, horizon: int = 14) -> tuple[int, int] | None:
+    """Ближайшее непрерывное окно заметного плодоношения вокруг/после дня i.
+
+    Это не новый прогнозный алгоритм: функция лишь переводит уже рассчитанный
+    индекс в календарное окно. NaN и значения ниже threshold разрывают окно.
+    Поиск ограничен horizon сутками, чтобы дальний хвост прогноза не выглядел
+    точнее, чем позволяют погодные данные.
+    """
+    if not values or not days or i < 0 or i >= min(len(values), len(days)):
+        return None
+    end = min(len(values), len(days), i + max(1, horizon) + 1)
+    start = next((j for j in range(i, end)
+                  if not math.isnan(values[j]) and values[j] >= threshold), None)
+    if start is None:
+        return None
+    stop = start
+    while stop + 1 < end and not math.isnan(values[stop + 1]) and values[stop + 1] >= threshold:
+        stop += 1
+    return start, stop
+
+
+def window_text(values: list[float], days: list[Day], i: int,
+                threshold: float = 33.0, horizon: int = 14) -> str:
+    """Человекочитаемая подпись ближайшего окна по готовому ряду индекса."""
+    win = forecast_window(values, days, i, threshold, horizon)
+    if win is None:
+        return f"В ближайшие {horizon} суток выраженного окна не видно."
+    a, b = win
+    peak = max(range(a, b + 1), key=lambda j: values[j])
+    if a == b:
+        span = days[a].d.strftime("%d.%m")
+    else:
+        span = f"{days[a].d.strftime('%d.%m')}–{days[b].d.strftime('%d.%m')}"
+    return f"Ближайшее окно: {span}; ориентировочный пик {days[peak].d.strftime('%d.%m')} ({values[peak]:.0f}/100)."
+
+
+def confidence(sp: Species, i: int, days: list[Day], m: list[float],
+               ts: list[float]) -> tuple[str, int, str]:
+    """Эвристическая устойчивость оценки, а не статистическая вероятность.
+
+    Чем сильнее факторы согласованы между собой и чем дальше день от края
+    доступных данных, тем устойчивее интерпретация индекса. Функция намеренно
+    не называет результат «вероятностью»: без полевых наблюдений это было бы
+    ложной точностью.
+    """
+    if i < 0 or i >= min(len(days), len(m), len(ts)):
+        return "низкая", 0, "недостаточно данных"
+    vals = [max(0.0, min(1.0, v)) for _, v, _ in explain(sp, i, days, m, ts)]
+    if not vals:
+        return "низкая", 0, "нет факторов для проверки"
+    mean = sum(vals) / len(vals)
+    spread = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+    # Согласованность факторов: противоречивый набор (часть 0, часть 1)
+    # должен давать меньшую уверенность, чем дружно хорошие/плохие условия.
+    agreement = max(0.0, 1.0 - 1.7 * spread)
+    edge = min(1.0, max(0.35, (len(days) - i) / 5.0))
+    score = int(round(100 * (0.72 * agreement + 0.28 * edge)))
+    score = max(0, min(100, score))
+    label = "высокая" if score >= 75 else "средняя" if score >= 50 else "низкая"
+    reason = ("факторы хорошо согласованы" if agreement >= 0.75 else
+              "часть факторов противоречит другим" if agreement < 0.5 else
+              "факторы согласованы умеренно")
+    if edge < 0.75:
+        reason += "; день близок к краю доступного прогноза"
+    return label, score, reason
 
 def limiting_factor(sp: Species, i: int, days: list[Day], m: list[float], ts: list[float]) -> str:
     span = list(range(sp.lag_min, sp.lag_max + 1))
