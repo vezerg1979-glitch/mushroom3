@@ -34,7 +34,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.15"
+VERSION = "3.19"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -69,42 +69,74 @@ class Species:
     gdd_sigma: float = 70.0 # ширина окна по накопленному теплу
     base_share: float = 0.0 # своя доля фоновой закладки; 0 — общая BASE
     note: str = ""
+    # Память среды. Короткий импульс дождя отвечает за запуск волны,
+    # а длинное окно — за накопленное увлажнение субстрата. Значения по
+    # умолчанию консервативны; их можно уточнять по видам без изменения API.
+    rain_memory: int = 21
+    temp_memory: int = 14
+    drought_days: int = 12
+    # Видоспецифичный дождевой отклик. Эти параметры задают не «вероятность»,
+    # а форму реакции субстрата/мицелия на осадки и последующий выход слоя.
+    rain_trigger_min: float = 3.0   # мм/3 сут: начало заметного импульса
+    rain_trigger_full: float = 22.0 # мм/3 сут: насыщение короткого импульса
+    rain_long_full: float = 65.0    # мм за rain_memory: насыщение фоновой влаги
+    drought_strength: float = 0.45  # макс. штраф после длительной засухи
+    lag_peak: float = 0.50          # положение пика внутри lag_min..lag_max
+    lag_tail: float = 0.15          # ненулевая «полка» по краям окна
 
 
 SPECIES: dict[str, Species] = {
     "белый": Species(
         "Белый гриб", "Boletus edulis", 16.0, 5.0, 0.30, 0.60, 6, 12,
         {6: 0.55, 7: 0.85, 8: 1.00, 9: 1.00, 10: 0.45},
+        rain_trigger_min=3.0, rain_trigger_full=22.0, rain_long_full=65.0,
+        drought_strength=0.45, lag_peak=0.50,
         note="Слои: колосовик (июнь), жнивник (июль), листопадник (авг-сен)."),
     "подберёзовик": Species(
         "Подберёзовик", "Leccinum scabrum", 15.0, 6.0, 0.28, 0.58, 4, 9,
         {5: 0.3, 6: 0.75, 7: 0.90, 8: 1.00, 9: 0.90, 10: 0.40},
+        rain_trigger_min=2.5, rain_trigger_full=16.0, rain_long_full=55.0,
+        drought_strength=0.40, lag_peak=0.38, lag_tail=0.10,
         note="Первым отзывается на дождь, растёт быстро — быстро и стареет."),
     "подосиновик": Species(
         "Подосиновик", "Leccinum aurantiacum", 14.5, 5.5, 0.30, 0.60, 5, 10,
-        {6: 0.6, 7: 0.85, 8: 1.00, 9: 1.00, 10: 0.50}),
+        {6: 0.6, 7: 0.85, 8: 1.00, 9: 1.00, 10: 0.50},
+        rain_trigger_min=3.5, rain_trigger_full=19.0, rain_long_full=60.0,
+        drought_strength=0.45, lag_peak=0.45),
     "лисичка": Species(
         "Лисичка", "Cantharellus cibarius", 17.0, 6.5, 0.22, 0.50, 3, 8,
         {6: 0.80, 7: 1.00, 8: 1.00, 9: 0.85, 10: 0.35},
+        rain_trigger_min=2.0, rain_trigger_full=14.0, rain_long_full=50.0,
+        drought_strength=0.18, lag_peak=0.45, lag_tail=0.22,
         note="Засухоустойчива: пережидает сушь и оживает после первого дождя."),
     "маслёнок": Species(
         "Маслёнок", "Suillus luteus", 14.0, 6.0, 0.26, 0.55, 3, 7,
         {6: 0.65, 7: 0.80, 8: 0.90, 9: 1.00, 10: 0.70},
+        rain_trigger_min=2.5, rain_trigger_full=15.0, rain_long_full=52.0,
+        drought_strength=0.38, lag_peak=0.32, lag_tail=0.10,
         note="Молодые сосняки, реагирует раньше других — 4-6 дней после дождя."),
     "опёнок": Species(
         "Опёнок осенний", "Armillaria mellea", 11.0, 4.0, 0.30, 0.55, 8, 16,
         {8: 0.45, 9: 1.00, 10: 0.85, 11: 0.30}, cold_snap=True,
+        rain_trigger_min=4.0, rain_trigger_full=20.0, rain_long_full=68.0,
+        drought_strength=0.35, lag_peak=0.62, lag_tail=0.20,
         note="Волна запускается похолоданием: ночи ниже +10 °C после тёплого периода."),
     "груздь": Species(
         "Груздь настоящий", "Lactarius resimus", 12.5, 4.5, 0.35, 0.68, 6, 12,
         {7: 0.65, 8: 1.00, 9: 1.00, 10: 0.35},
+        rain_trigger_min=5.0, rain_trigger_full=26.0, rain_long_full=80.0,
+        drought_strength=0.60, lag_peak=0.58,
         note="Самый влаголюбивый — нужен устойчиво сырой верхний слой."),
     "сыроежка": Species(
         "Сыроежка", "Russula spp.", 16.0, 7.0, 0.24, 0.52, 3, 7,
-        {6: 0.85, 7: 0.95, 8: 1.00, 9: 0.90, 10: 0.45}),
+        {6: 0.85, 7: 0.95, 8: 1.00, 9: 0.90, 10: 0.45},
+        rain_trigger_min=2.5, rain_trigger_full=16.0, rain_long_full=52.0,
+        drought_strength=0.32, lag_peak=0.38),
     "вешенка": Species(
         "Вешенка", "Pleurotus ostreatus", 9.0, 5.0, 0.18, 0.45, 5, 12,
         {4: 0.55, 5: 0.35, 9: 0.70, 10: 1.00, 11: 0.80},
+        rain_trigger_min=3.0, rain_trigger_full=18.0, rain_long_full=55.0,
+        drought_strength=0.20, lag_peak=0.55, lag_tail=0.22,
         note="Дереворазрушающий: меньше зависит от почвы, любит холод и сырость."),
     "сморчок": Species(
         "Сморчок", "Morchella spp.", 10.0, 4.5, 0.30, 0.62, 5, 12,
@@ -841,8 +873,24 @@ def _ramp(x: float, lo: float, hi: float) -> float:
     return u * u * (3 - 2 * u)          # плавный smoothstep
 
 
+def effective_precipitation(d: Day) -> float:
+    """Осадки, реально полезные как импульс увлажнения подстилки, мм.
+
+    ET0 FAO уже учитывает температуру, влажность, ветер и радиацию, поэтому
+    здесь не вводится второй испарительный коэффициент. Отсекается лишь
+    морось, в основном задерживаемая кроной, и небольшая доля избытка
+    сильного ливня, уходящая поверхностным стоком.
+    """
+    rain = max(0.0, d.precip)
+    if rain < 1.0:
+        return 0.15 * rain
+    throughfall = max(0.0, rain - 0.15)
+    runoff = max(0.0, throughfall - 30.0) * 0.04
+    return max(0.0, throughfall - runoff)
+
+
 def rain_pulse(days: list[Day]) -> list[float]:
-    """Импульс увлажнения: сумма осадков за 3 суток, нормированная 3..22 мм."""
+    """Короткий дождевой импульс (совместимый с прежним API)."""
     out = []
     for i in range(len(days)):
         s = sum(days[j].precip for j in range(max(0, i - 2), i + 1))
@@ -850,18 +898,69 @@ def rain_pulse(days: list[Day]) -> list[float]:
     return out
 
 
+def effective_rain_pulse(sp: Species, days: list[Day], m: list[float]) -> list[float]:
+    """Эффективное увлажнение вместо правила «один дождь -> один слой».
+
+    Сигнал объединяет три масштаба: 3-суточный дождевой импульс, накопленные
+    осадки за ``rain_memory`` суток и фактический влагозапас. После длинной
+    засухи слабый дождь получает штраф: значительная часть воды сначала
+    восстанавливает сухой субстрат, а не создаёт полноценный триггер.
+
+    Это всё ещё эвристическая процессная модель, а не вероятность находки.
+    """
+    short = []
+    for i in range(len(days)):
+        rain3 = sum(effective_precipitation(days[j])
+                    for j in range(max(0, i - 2), i + 1))
+        short.append(_ramp(rain3, sp.rain_trigger_min, sp.rain_trigger_full))
+    out = []
+    for i in range(len(days)):
+        lo = max(0, i - sp.rain_memory + 1)
+        rain_long = sum(effective_precipitation(d) for d in days[lo:i + 1])
+        # 10..65 мм: длинное окно не должно само создавать резкий пик,
+        # оно лишь показывает, что профиль успел накопить воду.
+        f_long = _ramp(rain_long, max(6.0, sp.rain_trigger_min * 2.0),
+                       sp.rain_long_full)
+        f_store = _ramp(m[i], sp.m_min * 0.75, sp.m_opt)
+
+        dry = 0
+        for j in range(i - 1, max(-1, i - sp.drought_days - 1), -1):
+            if j < 0 or days[j].precip >= 2.0 or m[j] >= sp.m_min:
+                break
+            dry += 1
+        drought_penalty = 1.0 - sp.drought_strength * _ramp(
+            dry, 5.0, float(sp.drought_days))
+
+        # Импульс остаётся главным: одинаковая сумма осадков залпом должна
+        # давать более выраженный запуск, чем мелкая морось.
+        signal = (0.80 * short[i] + 0.12 * f_long + 0.08 * f_store)
+        out.append(max(0.0, min(1.0, signal * drought_penalty)))
+    return out
+
+
+def thermal_factor(sp: Species, i: int, ts: list[float]) -> float:
+    """Температурная пригодность с памятью, а не по одной конкретной дате."""
+    lo = max(0, i - sp.temp_memory + 1)
+    vals = ts[lo:i + 1]
+    mean_t = sum(vals) / len(vals)
+    # Среднее задаёт фон, текущая температура сохраняет реакцию на быстрые
+    # похолодания/жару. Такой фильтр устойчивее одиночного шумного дня.
+    return 0.72 * _gauss(mean_t, sp.t_opt, sp.t_sigma) + \
+           0.28 * _gauss(ts[i], sp.t_opt, sp.t_sigma)
+
+
 def growth_rate(sp: Species, m: list[float], ts: list[float], days: list[Day]) -> list[float]:
     """Суточная скорость закладки примордиев, 0..1.
 
-    Плодоношение — импульсный отклик на увлажнение (BASE — фоновая закладка
-    при устойчиво сырой подстилке, PULSE — реакция на конкретный дождь).
+    v3.17 использует память среды: фактический влагозапас, короткий дождевой
+    импульс, накопленное увлажнение и сглаженный тепловой режим.
     """
-    pulse = rain_pulse(days)
-    base = sp.base_share or BASE          # весной толчок даёт талая вода, не дождь
+    pulse = effective_rain_pulse(sp, days, m)
+    base = sp.base_share or BASE
     out = []
     for i, d in enumerate(days):
         f_m = _ramp(m[i], sp.m_min, sp.m_opt)
-        f_t = _gauss(ts[i], sp.t_opt, sp.t_sigma)
+        f_t = thermal_factor(sp, i, ts)
         f_fr = 0.0 if d.tmin < -5 else (0.6 if d.tmin < -1 else 1.0)
         out.append(f_m * f_t * f_fr * (base + (1 - base) * pulse[i]))
     return out
@@ -870,9 +969,12 @@ def growth_rate(sp: Species, m: list[float], ts: list[float], days: list[Day]) -
 def lag_kernel(sp: Species) -> list[float]:
     """Треугольное ядро задержки плодообразования, нормированное на 1."""
     span = list(range(sp.lag_min, sp.lag_max + 1))
-    peak = (sp.lag_min + sp.lag_max) / 2
-    half = max(1.0, (sp.lag_max - sp.lag_min) / 2 + 0.5)
-    w = [max(0.0, 1 - abs(k - peak) / half) + 0.15 for k in span]
+    width = max(1, sp.lag_max - sp.lag_min)
+    peak = sp.lag_min + sp.lag_peak * width
+    # Разные виды могут выходить резко (маслёнок/подберёзовик) или иметь
+    # растянутый хвост (лисичка/опёнок). lag_tail не даёт жёсткого обрыва.
+    half = max(1.0, width / 2 + 0.5)
+    w = [max(0.0, 1 - abs(k - peak) / half) + sp.lag_tail for k in span]
     s = sum(w)
     return [x / s for x in w]
 
@@ -942,14 +1044,14 @@ def explain(sp: Species, i: int, days: list[Day], m: list[float],
     """
     span = list(range(sp.lag_min, sp.lag_max + 1))
     ker = lag_kernel(sp)
-    pulse = rain_pulse(days)
+    pulse = effective_rain_pulse(sp, days, m)
     wsum = sum(w for w, k in zip(ker, span) if i - k >= 0) or 1.0
 
     def avg(fn):
         return sum(w * fn(i - k) for w, k in zip(ker, span) if i - k >= 0) / wsum
 
     f_m = avg(lambda j: _ramp(m[j], sp.m_min, sp.m_opt))
-    f_t = avg(lambda j: _gauss(ts[j], sp.t_opt, sp.t_sigma))
+    f_t = avg(lambda j: thermal_factor(sp, j, ts))
     _b = sp.base_share or BASE
     f_p = avg(lambda j: _b + (1 - _b) * pulse[j])
     t_win = avg(lambda j: ts[j])
@@ -964,7 +1066,7 @@ def explain(sp: Species, i: int, days: list[Day], m: list[float],
         ("Температура почвы", f_t,
          f"в период закладки {t_win:.1f} °C, оптимум вида {sp.t_opt:.0f} °C"),
         ("Дожди как толчок", f_p,
-         "плодоношение запускает событие увлажнения, а не просто сырость"
+         "учтены импульс дождя, накопленные осадки, влагозапас и предшествующая засуха"
          + (" (весной эту роль берёт на себя талая вода)" if sp.spring else "")),
         ("Сезон", season,
          f"{RU_MONTHS[days[i].d.month]}: сезонный вес вида {season:.2f}"),
