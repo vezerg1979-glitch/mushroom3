@@ -1606,3 +1606,78 @@ class TestForecastInterpretation(unittest.TestCase):
         self.assertGreaterEqual(score, 0)
         self.assertLessEqual(score, 100)
         self.assertTrue(why)
+
+# --------------------------------------------------------------------------- #
+#  v3.17: память среды
+# --------------------------------------------------------------------------- #
+
+class TestEnvironmentalMemory(ResetConstants):
+
+    def test_effective_pulse_uses_long_rain_memory(self):
+        """После серии дождей фон выше, чем после одиночного такого же свежего дождя."""
+        wet = make_days(45, lambda i: 5.0 if 24 <= i <= 34 and i % 2 == 0 else
+                        (8.0 if i == 35 else 0.0), lambda i: 17.0)
+        dry = make_days(45, lambda i: 8.0 if i == 35 else 0.0, lambda i: 17.0)
+        sp = engine.SPECIES["белый"]
+        mw, md = engine.water_balance(wet), engine.water_balance(dry)
+        pw = engine.effective_rain_pulse(sp, wet, mw)
+        pd = engine.effective_rain_pulse(sp, dry, md)
+        self.assertGreater(pw[35], pd[35])
+
+    def test_drought_penalises_small_rewetting(self):
+        """Слабый дождь после долгой сухости не равен полноценному восстановлению субстрата."""
+        dry = make_days(45, lambda i: 4.0 if i == 40 else 0.0, lambda i: 20.0)
+        recent = make_days(45, lambda i: 2.1 if i == 35 else
+                           (4.0 if i == 40 else 0.0), lambda i: 20.0)
+        sp = engine.SPECIES["белый"]
+        # Одинаковый низкий влагозапас изолирует именно память о засухе:
+        # в recent сухая серия была прервана пять суток назад.
+        m = [0.10] * 45
+        pd = engine.effective_rain_pulse(sp, dry, m)
+        pr = engine.effective_rain_pulse(sp, recent, m)
+        self.assertLess(pd[40], pr[40])
+
+    def test_thermal_memory_rejects_one_day_heat_spike(self):
+        """Один жаркий день не должен перечёркивать две недели подходящей температуры."""
+        sp = engine.SPECIES["белый"]
+        ts = [16.0] * 20 + [29.0]
+        remembered = engine.thermal_factor(sp, 20, ts)
+        instant = engine._gauss(29.0, sp.t_opt, sp.t_sigma)
+        self.assertGreater(remembered, instant)
+        self.assertGreater(remembered, 0.65)
+
+
+class TestSpeciesSpecificWaveResponse(unittest.TestCase):
+    def test_rain_thresholds_are_species_specific(self):
+        self.assertLess(engine.SPECIES["лисичка"].rain_trigger_full,
+                        engine.SPECIES["груздь"].rain_trigger_full)
+        self.assertLess(engine.SPECIES["лисичка"].drought_strength,
+                        engine.SPECIES["груздь"].drought_strength)
+
+    def test_early_species_peak_earlier_inside_lag_window(self):
+        self.assertLess(engine.SPECIES["маслёнок"].lag_peak, 0.5)
+        self.assertGreater(engine.SPECIES["опёнок"].lag_peak, 0.5)
+
+    def test_lag_kernels_stay_normalized_with_species_shapes(self):
+        for sp in engine.SPECIES.values():
+            self.assertAlmostEqual(sum(engine.lag_kernel(sp)), 1.0, places=9)
+            self.assertTrue(all(x > 0 for x in engine.lag_kernel(sp)))
+
+# --------------------------------------------------------------------------- #
+#  v3.19: эффективные осадки
+# --------------------------------------------------------------------------- #
+
+class TestEffectivePrecipitation319(ResetConstants):
+    def test_drizzle_is_weak_trigger(self):
+        d = engine.Day(date(2026, 7, 1), 18, 10, 14, 0.5, 2.0)
+        self.assertLess(engine.effective_precipitation(d), 0.1)
+
+    def test_useful_rain_mostly_reaches_litter(self):
+        d = engine.Day(date(2026, 7, 1), 18, 10, 14, 12.0, 2.0)
+        self.assertGreater(engine.effective_precipitation(d), 11.0)
+
+    def test_downpour_has_small_runoff_loss(self):
+        d = engine.Day(date(2026, 7, 1), 18, 10, 14, 50.0, 2.0)
+        e = engine.effective_precipitation(d)
+        self.assertGreater(e, 45.0)
+        self.assertLess(e, 50.0)
