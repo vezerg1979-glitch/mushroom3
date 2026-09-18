@@ -79,6 +79,7 @@ import prefs
 import notify
 import track as track_mod
 import wave
+import radar
 from mapview import PlacePicker
 from walkscreen import WalkScreen
 
@@ -787,6 +788,10 @@ class MushroomApp(App):
             self.sel = self.sp_kind.text
         picks.add_widget(self.sp_kind)
         picks.add_widget(self.sp_bio)
+        b_radar = Button(text="Радар", size_hint_x=None, width=dp(68), font_size=sp(12),
+                         bold=True, background_normal="", background_color=BLUE)
+        b_radar.bind(on_release=lambda *_: self.show_radar())
+        picks.add_widget(b_radar)
         parts["picks"] = picks
 
         self._reload_spots()
@@ -1294,6 +1299,17 @@ class MushroomApp(App):
         for j in range(i, len(r.days)):
             self.list.add_widget(DayRow(r, j, self.sel, self.show_day))
 
+    def show_radar(self):
+        """Семь дней по грибам сезона: фаза волны и относительная сила."""
+        if not self.res:
+            self._sheet("Грибной радар", "Сначала загрузите прогноз.", 0.35)
+            return
+        r = self.res
+        month = r.days[r.today].d.month
+        names = [sp.name for sp in engine.SPECIES.values() if sp.months.get(month, 0) > 0]
+        self._sheet("Грибной радар — 7 дней",
+                    radar.text(r.days, r.idx, r.today, names=names, horizon=7), 0.82)
+
     def locate_me(self):
         """Своё положение: подписка на приёмник, первая же точка идёт в расчёт.
 
@@ -1420,6 +1436,12 @@ class MushroomApp(App):
                               if is_berry else
                               engine.plain_summary(spec, i, r.days, r.m, r.ts,
                                                    r.value(spec.name, i))) + "[/i]"]
+        if not is_berry:
+            label, score, why = engine.confidence(spec, i, r.days, r.m, r.ts)
+            rows += ["", f"[b]Устойчивость оценки: {label} ({score}/100)[/b]",
+                     f"[size=11sp][color=7b8272]{why}. Это не вероятность находки, "
+                     "а согласованность входных факторов.[/color][/size]",
+                     engine.window_text(r.idx[spec.name], r.days, i)]
         self._sheet(d.d.strftime("%d.%m.%Y"), "\n".join(rows), 0.82)
 
 
