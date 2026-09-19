@@ -1,0 +1,105 @@
+name: build-release
+
+# Подписанный APK для магазина. Запускается только вручную или по тегу:
+# случайно выложить релиз в RuStore из каждого коммита — плохая идея.
+#
+# Перед первым запуском заведите четыре секрета в
+# Settings -> Secrets and variables -> Actions:
+#
+#   KEYSTORE_BASE64      — файл ключа, закодированный в base64
+#   KEYSTORE_PASSWORD    — пароль хранилища
+#   KEY_ALIAS            — имя ключа внутри хранилища
+#   KEY_PASSWORD         — пароль ключа
+#
+# Как создать хранилище и получить base64 — см. docs/rustore.md
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container:
+      image: kivy/buildozer:latest
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверка секретов
+        run: |
+          test -n "${{ secrets.KEYSTORE_BASE64 }}" || {
+            echo "Нет секрета KEYSTORE_BASE64 — подписывать нечем."
+            echo "Инструкция: docs/rustore.md"
+            exit 1; }
+
+      - name: Проверки перед релизом
+        run: |
+          pip install pytest --break-system-packages 2>/dev/null || pip install pytest
+          pytest -q
+
+      - name: Распаковка ключа
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > /tmp/release.keystore
+          test -s /tmp/release.keystore || { echo "Ключ пустой"; exit 1; }
+
+      - name: Сборка подписанного APK
+        id: apk
+        continue-on-error: true
+        working-directory: android
+        env:
+          P4A_RELEASE_KEYSTORE: /tmp/release.keystore
+          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS: ${{ secrets.KEY_ALIAS }}
+          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          buildozer --profile store android release 2>&1 | tee release.log
+
+      # Разбор лога сборки. Шаг стоит с always(), потому что нужен он именно
+      # тогда, когда сборка упала. Но always() означает и «когда сборки не
+      # было вовсе»: если раньше споткнулись тесты, шаг всё равно запускался,
+      # не находил release.log и падал сам — красным горел он, а настоящая
+      # причина уезжала вверх по журналу и терялась.
+      - name: Найденные ошибки
+        if: always()
+        working-directory: android
+        run: |
+          if [ ! -f release.log ]; then
+            echo "Лога сборки нет: до сборки дело не дошло."
+            echo "Смотрите шаг, который упал раньше этого."
+            exit 0
+          fi
+          echo "===== ошибки ====="
+          grep -n -i -E "error:|Command failed|What went wrong|Traceback|not a supported wheel" \
+            release.log | tail -30 || true
+          echo "===== хвост ====="
+          tail -n 30 release.log || true
+
+      - name: Проверка подписи
+        if: steps.apk.outcome == 'success'
+        working-directory: android
+        run: |
+          APK=$(ls bin/*.apk | head -1)
+          echo "Файл: $APK"
+          # apksigner лежит в build-tools; ищем любую версию
+          SIGNER=$(find "$HOME/.buildozer" /opt -name apksigner -type f 2>/dev/null | head -1)
+          if [ -n "$SIGNER" ]; then
+            "$SIGNER" verify --print-certs "$APK" | head -20
+          else
+            echo "apksigner не найден, пропускаю проверку"
+          fi
+          unzip -p "$APK" AndroidManifest.xml > /dev/null && echo "манифест на месте"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.apk.outcome == 'success'
+        with:
+          name: mushroom-release
+          path: android/bin/*.apk
+          if-no-files-found: error
+
+      - name: Проверка результата
+        if: steps.apk.outcome == 'failure'
+        run: exit 1
