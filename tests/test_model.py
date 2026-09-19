@@ -1681,3 +1681,150 @@ class TestEffectivePrecipitation319(ResetConstants):
         e = engine.effective_precipitation(d)
         self.assertGreater(e, 45.0)
         self.assertLess(e, 50.0)
+
+
+# --------------------------------------------------------------------------- #
+#  v3.20: устойчивость благоприятного окна
+# --------------------------------------------------------------------------- #
+
+class TestFavorableWindow320(ResetConstants):
+    def test_sustained_window_beats_one_good_day(self):
+        sp = engine.SPECIES["белый"]
+        m_steady = [0.50] * 10
+        t_steady = [16.0] * 10
+        m_flash = [0.12] * 9 + [0.50]
+        t_flash = [28.0] * 9 + [16.0]
+        self.assertGreater(engine.favorable_window_factor(sp, 9, m_steady, t_steady),
+                           engine.favorable_window_factor(sp, 9, m_flash, t_flash))
+
+    def test_window_factor_is_bounded_and_soft(self):
+        sp = engine.SPECIES["белый"]
+        for m, ts in (([0.0] * 6, [35.0] * 6), ([0.6] * 6, [16.0] * 6)):
+            f = engine.favorable_window_factor(sp, 5, m, ts)
+            self.assertGreaterEqual(f, 0.72)
+            self.assertLessEqual(f, 1.0)
+
+# --------------------------------------------------------------------------- #
+#  v3.21: анализ чувствительности — гладкость и физическая направленность
+# --------------------------------------------------------------------------- #
+
+class TestSensitivityAudit(ResetConstants):
+
+    @staticmethod
+    def _day(rain):
+        return engine.Day(date(2026, 8, 1), 22.0, 12.0, 17.0, rain,
+                          2.5, None, None, None)
+
+    def test_effective_precipitation_has_no_one_mm_jump(self):
+        """Малое изменение осадков около 1 мм не должно давать скачок модели."""
+        a = engine.effective_precipitation(self._day(0.99))
+        b = engine.effective_precipitation(self._day(1.00))
+        c = engine.effective_precipitation(self._day(1.01))
+        self.assertLess(abs(b - a), 0.05)
+        self.assertLess(abs(c - b), 0.05)
+
+    def test_effective_precipitation_monotone(self):
+        """Больше дождя не должно давать меньше полезного увлажнения."""
+        rains = [0, .2, .5, .8, 1, 1.5, 2, 3, 5, 10, 20, 40, 80]
+        vals = [engine.effective_precipitation(self._day(r)) for r in rains]
+        self.assertTrue(all(b >= a for a, b in zip(vals, vals[1:])), vals)
+
+    def test_temperature_response_peaks_near_species_optimum(self):
+        """При прочих равных тепловой фактор максимален около оптимума вида."""
+        for sp in engine.SPECIES.values():
+            cold = engine.thermal_factor(sp, 13, [sp.t_opt - 10] * 14)
+            opt = engine.thermal_factor(sp, 13, [sp.t_opt] * 14)
+            hot = engine.thermal_factor(sp, 13, [sp.t_opt + 10] * 14)
+            self.assertGreaterEqual(opt, cold, sp.name)
+            self.assertGreaterEqual(opt, hot, sp.name)
+
+
+# --------------------------------------------------------------------------- #
+#  v3.22: системный аудит сетки синтетических сценариев
+# --------------------------------------------------------------------------- #
+
+class TestSystematicSensitivityAudit(ResetConstants):
+    def test_all_species_pass_systematic_audit(self):
+        import sensitivity_audit
+        issues = sensitivity_audit.run_audit()
+        self.assertEqual(issues, [], "\n".join(map(str, issues)))
+
+    def test_lag_kernels_peak_near_declared_peak(self):
+        for sp in engine.SPECIES.values():
+            k = engine.lag_kernel(sp)
+            actual = sp.lag_min + max(range(len(k)), key=k.__getitem__)
+            expected = sp.lag_min + sp.lag_peak * max(1, sp.lag_max-sp.lag_min)
+            self.assertLessEqual(abs(actual-expected), 1.1, sp.name)
+
+    def test_sustained_rain_response_is_monotone_for_every_species(self):
+        from datetime import timedelta
+        for sp in engine.SPECIES.values():
+            vals=[]
+            for rain in (0, .5, 1, 2, 4, 8, 15, 30):
+                n=max(24, sp.rain_memory+2)
+                ds=[engine.Day(date(2026,8,1)+timedelta(days=i),
+                               sp.t_opt+5, sp.t_opt-5, sp.t_opt, rain,
+                               2.5, None, None, None) for i in range(n)]
+                vals.append(engine.effective_rain_pulse(sp, ds, [sp.m_opt]*n)[-1])
+            self.assertTrue(all(b >= a-1e-10 for a,b in zip(vals, vals[1:])),
+                            (sp.name, vals))
+
+
+def test_multidimensional_sensitivity_audit_has_no_paradoxes():
+    import sensitivity_audit
+    issues, summaries = sensitivity_audit.run_matrix_audit()
+    assert issues == []
+    assert len(summaries) == len(engine.SPECIES)
+    assert all(s.scenarios >= 100 for s in summaries)
+    assert all(s.dominance_checks > s.scenarios for s in summaries)
+
+
+def test_multidimensional_audit_covers_all_species():
+    import sensitivity_audit
+    _, summaries = sensitivity_audit.run_matrix_audit()
+    assert {s.species for s in summaries} == {sp.name for sp in engine.SPECIES.values()}
+    assert all(0.0 <= s.min_growth <= s.max_growth <= 1.0 for s in summaries)
+
+# --------------------------------------------------------------------------- #
+#  v3.24: аудит временных погодных последовательностей
+# --------------------------------------------------------------------------- #
+
+def test_temporal_sequence_audit_has_no_paradoxes():
+    import sensitivity_audit
+    issues, summaries = sensitivity_audit.run_sequence_audit()
+    assert issues == []
+    assert len(summaries) == len(engine.SPECIES)
+    assert all(s.scenarios == 6 for s in summaries)
+    assert all(s.checks > 300 for s in summaries)
+
+
+def test_temporal_sequence_peak_respects_species_lag():
+    import sensitivity_audit
+    _, summaries = sensitivity_audit.run_sequence_audit()
+    by_name = {s.species: s for s in summaries}
+    for sp in engine.SPECIES.values():
+        lag = by_name[sp.name].peak_lag_days
+        assert 0 <= lag <= sp.lag_max + 3, (sp.name, lag)
+
+class TestReliefMicroclimate(ResetConstants):
+    def tearDown(self):
+        engine.set_relief("ровно")
+        super().tearDown()
+
+    def test_relief_profiles_are_valid(self):
+        for key, r in engine.RELIEFS.items():
+            self.assertEqual(key, r.key)
+            self.assertTrue(-0.25 <= r.moisture_offset <= 0.25)
+            self.assertTrue(-2.0 <= r.t_offset <= 2.0)
+
+    def test_north_slope_is_cooler_and_wetter_than_south(self):
+        days = make_days(30, lambda i: 1.0, lambda i: 17.0)
+        engine.set_biotope("смешанный")
+        engine.set_relief("север")
+        mn = engine.water_balance(days)[-1]
+        tn = engine.soil_temperature(days)[-1]
+        engine.set_relief("юг")
+        ms = engine.water_balance(days)[-1]
+        ts = engine.soil_temperature(days)[-1]
+        self.assertGreater(mn, ms)
+        self.assertLess(tn, ts)

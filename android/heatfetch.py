@@ -36,6 +36,7 @@ import time
 
 import heatgrid
 import mushroom_forecast as engine
+import biotope_map
 
 #: Пауза между последовательными запросами при отказе от пакетного режима.
 #: Без неё десятки запросов подряд выглядят как нагрузочный тест чужого
@@ -67,6 +68,17 @@ def fetch_grid(grid: heatgrid.Grid, forecast_days: int = 7,
     if on_progress:
         on_progress(0, len(cells))
 
+    # Один необязательный картографический запрос на всю область. Ошибка или
+    # неоднозначные теги ничего не ломают: остаётся ручной профиль пользователя.
+    if grid.auto_biotope_enabled:
+        try:
+            q = biotope_map.overpass_query(cells)
+            osm = engine._get_json(biotope_map.OVERPASS_URL, {"data": q}, timeout=15)
+            feats = biotope_map.features_from_overpass(osm)
+            grid.biotope_auto = biotope_map.assign(cells, feats) > 0
+        except Exception:                                         # noqa: BLE001
+            grid.biotope_auto = False
+
     center = cells[len(cells) // 2]
     try:
         soil_keys, has_snow, _ = engine.probe_soil_keys(
@@ -78,15 +90,15 @@ def fetch_grid(grid: heatgrid.Grid, forecast_days: int = 7,
         soil_keys, has_snow = None, False
 
     if len(cells) > 1 and _try_batch(cells, forecast_days, soil_keys,
-                                     has_snow, on_progress):
-        return grid
+                                     has_snow, on_progress, grid.biotope, grid.relief):
+        return heatgrid.finalize_cells(grid)
 
-    _fetch_sequential(cells, forecast_days, soil_keys, has_snow, on_progress)
-    return grid
+    _fetch_sequential(cells, forecast_days, soil_keys, has_snow, on_progress, grid.biotope, grid.relief, finalize=False)
+    return heatgrid.finalize_cells(grid)
 
 
 def _try_batch(cells: list, forecast_days: int, soil_keys, has_snow,
-               on_progress) -> bool:
+               on_progress, biotope=heatgrid.GRID_BIOTOPE, relief="ровно") -> bool:
     """Один запрос на все клетки. True — получилось и клетки заполнены."""
     daily = ",".join(engine.DAILY_VARS)
     params = {
@@ -122,14 +134,18 @@ def _try_batch(cells: list, forecast_days: int, soil_keys, has_snow,
         except Exception as e:                                    # noqa: BLE001
             cell.error = f"{type(e).__name__}: {e}"[:120]
             continue
-        heatgrid.fill_cell(cell, days)
+        cell._days = days
+        try:
+            cell.elevation = float(item.get("elevation")) if item.get("elevation") is not None else None
+        except (TypeError, ValueError):
+            cell.elevation = None
     if on_progress:
         on_progress(len(cells), len(cells))
     return True
 
 
 def _fetch_sequential(cells: list, forecast_days: int, soil_keys, has_snow,
-                      on_progress) -> None:
+                      on_progress, biotope=heatgrid.GRID_BIOTOPE, relief="ровно", finalize=True) -> None:
     """Резервный путь: по одной точке, с паузой между запросами.
 
     Использует уже подобранные (или заведомо отсутствующие) слои почвы, а
@@ -141,12 +157,21 @@ def _fetch_sequential(cells: list, forecast_days: int, soil_keys, has_snow,
     """
     for i, cell in enumerate(cells):
         try:
-            days = engine.fetch_weather_with_keys(
+            days, elevation = engine.fetch_weather_with_keys_meta(
                 cell.lat, cell.lon, forecast_days, soil_keys, has_snow)
-            heatgrid.fill_cell(cell, days)
+            cell._days = days
+            cell.elevation = elevation
         except Exception as e:                                    # noqa: BLE001
             cell.error = f"{type(e).__name__}: {e}"[:120]
         if on_progress:
             on_progress(i + 1, len(cells))
         if i + 1 < len(cells):
             time.sleep(THROTTLE_S)
+    # Сохраняем прежний контракт внутренней функции для прямых вызовов
+    # и тестов. fetch_grid передаёт finalize=False, потому что ему нужна
+    # геометрия всей Grid для вывода автоматического рельефа.
+    if finalize:
+        for cell in cells:
+            if cell._days:
+                heatgrid.fill_cell(cell, cell._days, biotope, relief)
+                cell._days = None

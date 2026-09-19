@@ -771,6 +771,14 @@ class PlacePicker(Popup):
         # либо проходит целиком, либо нет, а резервный путь идёт по одной
         # точке и может занять заметное время.
         heat_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+        # Можно сравнивать территорию по одному виду. «Лучший вид» сохраняет
+        # старое поведение и полезен для общего обзора района.
+        self._heat_species_by_name = {sp.name: key for key, sp in engine.SPECIES.items()}
+        self.heat_species = Spinner(
+            text="Лучший вид", values=("Лучший вид",) + tuple(self._heat_species_by_name),
+            size_hint_x=0.58, font_size=sp(12), background_normal="",
+            background_color=hexc(palette.SOFT), color=INK)
+        heat_row.add_widget(self.heat_species)
         self.b_heat = Button(text="Раскрасить", font_size=sp(13),
                              background_normal="", background_color=hexc(palette.SOFT),
                              color=INK)
@@ -778,9 +786,9 @@ class PlacePicker(Popup):
         heat_row.add_widget(self.b_heat)
         root.add_widget(heat_row)
         self.heat_status = Label(
-            text="Цвет — только погода: тепло и влажность. Тип леса "
-                 "везде считается смешанным, это не то, что растёт "
-                 "именно тут — это вы знаете сами.",
+            text="Карта учитывает погоду и выбранный тип леса. Профиль биотопа "
+                 "применяется ко всей сетке — это не автоматическое распознавание "
+                 "пород деревьев.",
             font_size=sp(10), color=MUTED, size_hint_y=None, height=dp(28),
             halign="left", valign="top")
         self.heat_status.bind(
@@ -836,7 +844,11 @@ class PlacePicker(Popup):
         не отпуская интерфейс.
         """
         south, west, north, east = self.map.visible_bounds()
-        grid = heatgrid.plan(south, west, north, east)
+        grid = heatgrid.plan(south, west, north, east,
+                             biotope=engine.CURRENT_BIOTOPE.key,
+                             relief=engine.CURRENT_RELIEF.key,
+                             auto_biotope=True,
+                             target_species=self._heat_species_by_name.get(self.heat_species.text, ""))
         if not grid:
             self.heat_status.text = "Карта ещё не готова — подождите секунду и попробуйте снова."
             return
@@ -864,11 +876,19 @@ class PlacePicker(Popup):
         elif неудачных:
             self.heat_status.text = (f"Раскрашено, {неудачных} из "
                                      f"{grid.total} клеток без ответа сети. "
-                                     "Цвет — только погода, не тип леса.")
+                                     f"Профиль: {engine.BIOTOPES[grid.biotope].name}; "
+                                     f"{engine.RELIEFS[grid.relief].name}.")
         else:
-            self.heat_status.text = ("Раскрашено по погоде. Тип леса везде "
-                                     "считается смешанным — где что растёт, "
-                                     "вы знаете сами.")
+            bio = engine.BIOTOPES.get(grid.biotope)
+            auto_bio = sum(1 for c in grid.cells if getattr(c, "auto_biotope", ""))
+            auto_rel = sum(1 for c in grid.cells if getattr(c, "auto_relief", ""))
+            mode = (engine.SPECIES[grid.target_species].name
+                    if grid.target_species in engine.SPECIES else "лучший вид")
+            self.heat_status.text = (
+                f"Раскрашено ({mode}): погода + биотоп + рельеф. "
+                f"Авто-биотоп: {auto_bio}/{grid.total}; авто-рельеф: {auto_rel}/{grid.total}. "
+                f"Для остальных клеток: «{bio.name if bio else grid.biotope}», "
+                f"«{engine.RELIEFS[grid.relief].name}».")
 
     def _save_offline(self):
         """Скачать квадрат карты вокруг выбранной точки."""

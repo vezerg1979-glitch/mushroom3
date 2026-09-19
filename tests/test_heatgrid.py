@@ -190,3 +190,161 @@ def test_fill_cell_reports_a_broken_computation_without_raising():
     heatgrid.fill_cell(cell, сломанные_дни)      # не должно бросить исключение
     assert cell.index is None
     assert cell.error
+
+
+def test_grid_keeps_requested_biotope():
+    g = heatgrid.plan(*_box(20), biotope="сосняк")
+    assert g.biotope == "сосняк"
+
+
+def test_unknown_grid_biotope_falls_back_to_mixed():
+    g = heatgrid.plan(*_box(20), biotope="марсианский лес")
+    assert g.biotope == "смешанный"
+
+
+def test_fill_cell_can_use_selected_biotope_and_restores_global():
+    days = _synthetic_days()
+    engine.set_biotope("ельник")
+    try:
+        pine = heatgrid.Cell(lat=LAT, lon=LON, half_km=1.0)
+        mixed = heatgrid.Cell(lat=LAT, lon=LON, half_km=1.0)
+        heatgrid.fill_cell(pine, days, "сосняк")
+        heatgrid.fill_cell(mixed, days, "смешанный")
+        assert engine.CURRENT_BIOTOPE.key == "ельник"
+        # Не требуем, какой профиль обязан быть лучше: важно, что профиль
+        # реально участвует в расчёте и может изменить результат/лидера.
+        assert (pine.index, pine.species) != (mixed.index, mixed.species)
+    finally:
+        engine.set_biotope("смешанный")
+
+def test_grid_keeps_requested_relief():
+    g = heatgrid.plan(*_box(20), biotope="сосняк", relief="север")
+    assert g.relief == "север"
+
+
+def test_unknown_grid_relief_falls_back_to_flat():
+    g = heatgrid.plan(*_box(20), relief="кратер")
+    assert g.relief == "ровно"
+
+
+def test_relief_changes_cell_and_is_restored():
+    days = _synthetic_days()
+    engine.set_biotope("смешанный")
+    engine.set_relief("возвышенность")
+    try:
+        north = heatgrid.Cell(lat=LAT, lon=LON, half_km=1.0)
+        south = heatgrid.Cell(lat=LAT, lon=LON, half_km=1.0)
+        heatgrid.fill_cell(north, days, "смешанный", "север")
+        heatgrid.fill_cell(south, days, "смешанный", "юг")
+        assert engine.CURRENT_RELIEF.key == "возвышенность"
+        assert (north.index, north.species) != (south.index, south.species)
+    finally:
+        engine.set_relief("ровно")
+
+
+def _terrain_grid(vals, rows=3, cols=3):
+    cells=[]
+    for i,z in enumerate(vals):
+        cells.append(heatgrid.Cell(lat=55+i//cols*.01, lon=37+i%cols*.01,
+                                   half_km=0.5, elevation=z))
+    return heatgrid.Grid(cells=cells, rows=rows, cols=cols, relief="ровно")
+
+
+def test_auto_terrain_detects_local_depression_and_ridge():
+    g=_terrain_grid([100,100,100,100,90,100,100,100,100])
+    heatgrid.infer_relief(g)
+    assert g.cells[4].auto_relief == "низина"
+    g=_terrain_grid([100,100,100,100,110,100,100,100,100])
+    heatgrid.infer_relief(g)
+    assert g.cells[4].auto_relief == "возвышенность"
+
+
+def test_auto_terrain_detects_north_and_south_aspect():
+    # rows grow northward. Higher north => downhill/facing south.
+    g=_terrain_grid([90,90,90,100,100,100,110,110,110])
+    heatgrid.infer_relief(g)
+    assert g.cells[4].auto_relief == "юг"
+    g=_terrain_grid([110,110,110,100,100,100,90,90,90])
+    heatgrid.infer_relief(g)
+    assert g.cells[4].auto_relief == "север"
+
+
+def test_auto_terrain_falls_back_when_elevation_missing():
+    g=_terrain_grid([None]*9)
+    heatgrid.infer_relief(g)
+    assert not g.terrain_auto
+    assert all(not c.auto_relief for c in g.cells)
+
+# --------------------------------------------------------------------------- #
+#  Автоматический биотоп по картографическим тегам (v3.28)
+# --------------------------------------------------------------------------- #
+import biotope_map
+
+
+def test_biotope_classifier_only_accepts_confident_tags():
+    assert biotope_map.classify_tags({"genus": "Betula"}) == "березняк"
+    assert biotope_map.classify_tags({"species": "Picea abies"}) == "ельник"
+    assert biotope_map.classify_tags({"species:en": "Scots pine"}) == "сосняк"
+    assert biotope_map.classify_tags({"natural": "wetland", "wetland": "bog"}) == "болото"
+    assert biotope_map.classify_tags({"landuse": "forest", "leaf_type": "mixed"}) == "смешанный"
+    # Просто forest/wood недостаточно, чтобы выдумывать породу дерева.
+    assert biotope_map.classify_tags({"landuse": "forest"}) is None
+    assert biotope_map.classify_tags({"natural": "wood", "leaf_type": "needleleaved"}) is None
+
+
+def test_biotope_assign_uses_nearest_confident_feature_and_keeps_fallback():
+    cells = [heatgrid.Cell(lat=55.000, lon=37.000, half_km=1),
+             heatgrid.Cell(lat=55.100, lon=37.100, half_km=1)]
+    features = [(55.001, 37.001, "березняк")]
+    n = biotope_map.assign(cells, features, max_km=3.0)
+    assert n == 1
+    assert cells[0].auto_biotope == "березняк"
+    assert cells[1].auto_biotope == ""
+
+
+def test_finalize_uses_auto_biotope_but_does_not_change_manual_grid_profile(monkeypatch):
+    g = heatgrid.Grid(cells=[heatgrid.Cell(lat=LAT, lon=LON, half_km=1,
+                                           auto_biotope="сосняк",
+                                           _days=_synthetic_days())],
+                      rows=1, cols=1, biotope="ельник")
+    seen = {}
+    original = heatgrid.fill_cell
+    def spy(cell, days, biotope="смешанный", relief="ровно"):
+        seen["biotope"] = biotope
+        return original(cell, days, biotope, relief)
+    monkeypatch.setattr(heatgrid, "fill_cell", spy)
+    heatgrid.finalize_cells(g)
+    assert seen["biotope"] == "сосняк"
+    assert g.biotope == "ельник"
+
+# --------------------------------------------------------------------------- #
+#  Карта конкретного вида (v3.29)
+# --------------------------------------------------------------------------- #
+def test_plan_keeps_valid_target_species_and_rejects_unknown():
+    g = heatgrid.plan(55.0, 37.0, 55.1, 37.1, target_species="белый")
+    assert g.target_species == "белый"
+    g2 = heatgrid.plan(55.0, 37.0, 55.1, 37.1, target_species="несуществующий")
+    assert g2.target_species == ""
+
+
+def test_fill_cell_specific_species_is_not_best_species():
+    days = _synthetic_days()
+    c = heatgrid.Cell(lat=LAT, lon=LON, half_km=1)
+    heatgrid.fill_cell(c, days, target_species="лисичка")
+    assert c.species == engine.SPECIES["лисичка"].name
+    assert c.index is not None
+
+
+def test_finalize_passes_target_species(monkeypatch):
+    g = heatgrid.Grid(cells=[heatgrid.Cell(lat=LAT, lon=LON, half_km=1,
+                                           _days=_synthetic_days())],
+                      rows=1, cols=1, target_species="белый")
+    seen = {}
+    original = heatgrid.fill_cell
+    def spy(cell, days, biotope="смешанный", relief="ровно", target_species=""):
+        seen["target_species"] = target_species
+        return original(cell, days, biotope, relief, target_species)
+    monkeypatch.setattr(heatgrid, "fill_cell", spy)
+    heatgrid.finalize_cells(g)
+    assert seen["target_species"] == "белый"
+    assert g.cells[0].species == engine.SPECIES["белый"].name

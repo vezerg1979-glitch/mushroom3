@@ -784,10 +784,15 @@ class MushroomApp(App):
                                       + [s.name for s in engine.SPECIES.values()]
                                       + [b.name for b in engine.BERRIES.values()])
         self.sp_kind.bind(text=self._on_kind)
+        self.sp_relief = Spinner(text=self._saved_relief(saved), font_size=sp(11),
+                                 background_normal="", background_color=CARD, color=INK,
+                                 values=[r.name for r in engine.RELIEFS.values()])
+        self.sp_relief.bind(text=self._on_relief)
         if self.sp_kind.text != self.ALL_KINDS:
             self.sel = self.sp_kind.text
         picks.add_widget(self.sp_kind)
         picks.add_widget(self.sp_bio)
+        picks.add_widget(self.sp_relief)
         b_radar = Button(text="Радар", size_hint_x=None, width=dp(68), font_size=sp(12),
                          bold=True, background_normal="", background_color=BLUE)
         b_radar.bind(on_release=lambda *_: self.show_radar())
@@ -1246,6 +1251,15 @@ class MushroomApp(App):
         engine.set_biotope(b.key)
         return b.name
 
+    @staticmethod
+    def _saved_relief(saved: dict) -> str:
+        key = saved.get("relief")
+        r = engine.RELIEFS.get(key) if key else None
+        if r is None:
+            r = engine.RELIEFS["ровно"]
+        engine.set_relief(r.key)
+        return r.name
+
     @classmethod
     def _saved_kind(cls, saved: dict) -> str:
         name = saved.get("kind")
@@ -1261,6 +1275,16 @@ class MushroomApp(App):
             return
         engine.set_biotope(key)
         prefs.save(biotope=key)
+        if self.res is not None:
+            self.res = Result(self.res.place, self.res.days, self.res.today)
+            self.refresh()
+
+    def _on_relief(self, _sp, text):
+        key = next((r.key for r in engine.RELIEFS.values() if r.name == text), None)
+        if not key:
+            return
+        engine.set_relief(key)
+        prefs.save(relief=key)
         if self.res is not None:
             self.res = Result(self.res.place, self.res.days, self.res.today)
             self.refresh()

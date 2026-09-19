@@ -34,7 +34,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.19"
+VERSION = "3.29"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -562,6 +562,38 @@ BIOTOPES: dict[str, Biotope] = {
 CURRENT_BIOTOPE: Biotope = BIOTOPES["смешанный"]
 
 
+@dataclass(frozen=True)
+class Relief:
+    key: str
+    name: str
+    moisture_offset: float  # поправка к доступной влаге, доля 0..1
+    t_offset: float         # поправка к температуре почвы, °C
+    note: str = ""
+
+
+RELIEFS: dict[str, Relief] = {
+    "ровно": Relief("ровно", "Ровное место", 0.00, 0.0, "нейтральный микрорельеф"),
+    "север": Relief("север", "Северный склон", 0.07, -0.9,
+                     "меньше прогрев и испарение, влага держится дольше"),
+    "юг": Relief("юг", "Южный склон", -0.09, 1.2,
+                  "быстрее прогревается и быстрее высыхает"),
+    "низина": Relief("низина", "Локальная низина", 0.13, -0.5,
+                      "сток и холодный воздух повышают сырость"),
+    "возвышенность": Relief("возвышенность", "Возвышенность / гребень", -0.12, 0.7,
+                             "дренируется и обдувается сильнее"),
+}
+CURRENT_RELIEF: Relief = RELIEFS["ровно"]
+
+
+def set_relief(key: str) -> Relief:
+    global CURRENT_RELIEF
+    r = RELIEFS.get((key or "").strip().lower())
+    if r is None:
+        raise LookupError(f"Неизвестный рельеф: {key}. Доступно: {', '.join(RELIEFS)}")
+    CURRENT_RELIEF = r
+    return r
+
+
 def set_biotope(key: str) -> Biotope:
     """Переключает почвенные константы под выбранный тип леса."""
     global CURRENT_BIOTOPE, THETA_WILT, THETA_FC, CAPACITY_MM, CANOPY
@@ -692,6 +724,32 @@ def fetch_weather_with_keys(lat: float, lon: float, forecast_days: int,
     return _parse_daily_blob(data, soil_keys, has_snow)
 
 
+
+def fetch_weather_with_keys_meta(lat: float, lon: float, forecast_days: int,
+                                 soil_keys, has_snow: bool) -> tuple[list[Day], float | None]:
+    """Как fetch_weather_with_keys, но возвращает ещё высоту точки.
+
+    Поле elevation уже входит в обычный ответ forecast API; отдельного
+    запроса к сервису высот не требуется. Используется тепловой картой
+    для осторожной оценки локального рельефа.
+    """
+    daily = ",".join(DAILY_VARS)
+    params = {"latitude": lat, "longitude": lon, "timezone": "auto",
+              "past_days": PAST_DAYS,
+              "forecast_days": max(3, min(16, forecast_days)), "daily": daily}
+    if soil_keys:
+        extra = f",{SNOW_KEY}" if has_snow else ""
+        params["hourly"] = f"{soil_keys[0]},{soil_keys[1]}{extra}"
+    try:
+        data = _get_json(FORECAST_URL, params)
+    except urllib.error.HTTPError:
+        soil_keys, has_snow, data = probe_soil_keys(lat, lon, forecast_days)
+    try:
+        elevation = float(data.get("elevation")) if data.get("elevation") is not None else None
+    except (TypeError, ValueError):
+        elevation = None
+    return _parse_daily_blob(data, soil_keys, has_snow), elevation
+
 def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
     soil_keys, has_snow, data = probe_soil_keys(place.lat, place.lon, forecast_days)
     return _parse_daily_blob(data, soil_keys, has_snow)
@@ -767,7 +825,7 @@ def water_balance(days: list[Day], init: float = 0.5) -> list[float]:
     theta = _filled(days, "soil_w")
     if theta is not None:
         span = THETA_FC - THETA_WILT
-        return [max(0.0, min(1.0, (v - THETA_WILT) / span)) for v in theta]
+        return [max(0.0, min(1.0, (v - THETA_WILT) / span + CURRENT_RELIEF.moisture_offset)) for v in theta]
 
     w = CAPACITY_MM * init
     out = []
@@ -775,7 +833,7 @@ def water_balance(days: list[Day], init: float = 0.5) -> list[float]:
         w = min(CAPACITY_MM, w + INTERCEPT * d.precip)
         beta = 0.30 + 0.70 * (w / CAPACITY_MM)      # сухая подстилка сохнет медленнее
         w = max(0.0, w - CANOPY * d.et0 * beta)
-        out.append(w / CAPACITY_MM)
+        out.append(max(0.0, min(1.0, w / CAPACITY_MM + CURRENT_RELIEF.moisture_offset)))
     return out
 
 
@@ -785,7 +843,7 @@ def soil_temperature(days: list[Day], alpha: float = 0.32) -> list[float]:
     Берётся из модели погоды; при её отсутствии приближается сглаживанием
     температуры воздуха с лагом около трёх суток и поправкой на затенение.
     """
-    off = CURRENT_BIOTOPE.t_offset
+    off = CURRENT_BIOTOPE.t_offset + CURRENT_RELIEF.t_offset
     st = _filled(days, "soil_t")
     if st is not None:
         return [v + off for v in st]
@@ -882,9 +940,12 @@ def effective_precipitation(d: Day) -> float:
     сильного ливня, уходящая поверхностным стоком.
     """
     rain = max(0.0, d.precip)
-    if rain < 1.0:
-        return 0.15 * rain
-    throughfall = max(0.0, rain - 0.15)
+    # v3.21: непрерывная функция перехвата. В v3.20 на границе 1 мм был
+    # искусственный скачок: 0.99 мм -> ~0.15 мм, 1.00 мм -> 0.85 мм.
+    # Доля воды, достигающая подстилки, плавно растёт по мере насыщения
+    # кроны: морось почти теряется, дождь >= 3 мм проходит почти целиком.
+    throughfall_share = 0.15 + 0.80 * _ramp(rain, 0.5, 3.0)
+    throughfall = rain * throughfall_share
     runoff = max(0.0, throughfall - 30.0) * 0.04
     return max(0.0, throughfall - runoff)
 
@@ -949,6 +1010,26 @@ def thermal_factor(sp: Species, i: int, ts: list[float]) -> float:
            0.28 * _gauss(ts[i], sp.t_opt, sp.t_sigma)
 
 
+def favorable_window_factor(sp: Species, i: int, m: list[float], ts: list[float]) -> float:
+    """Устойчивость благоприятного влажно-теплового окна, 0.72..1.0.
+
+    Одиночный удачный день не должен запускать такой же сильный сигнал, как
+    несколько суток подходящих условий. Берём последние пять суток, причём
+    недавние имеют больший вес. Нижняя граница намеренно мягкая: сильный
+    дождевой импульс после засухи остаётся способен запустить волну.
+    """
+    lo = max(0, i - 4)
+    vals = []
+    weights = []
+    for j in range(lo, i + 1):
+        fm = _ramp(m[j], sp.m_min * 0.85, sp.m_opt)
+        ft = _gauss(ts[j], sp.t_opt, sp.t_sigma)
+        vals.append(fm * ft)
+        weights.append(1.0 + 0.25 * (j - lo))
+    mean = sum(v * w for v, w in zip(vals, weights)) / sum(weights)
+    return 0.72 + 0.28 * _ramp(mean, 0.20, 0.72)
+
+
 def growth_rate(sp: Species, m: list[float], ts: list[float], days: list[Day]) -> list[float]:
     """Суточная скорость закладки примордиев, 0..1.
 
@@ -962,7 +1043,11 @@ def growth_rate(sp: Species, m: list[float], ts: list[float], days: list[Day]) -
         f_m = _ramp(m[i], sp.m_min, sp.m_opt)
         f_t = thermal_factor(sp, i, ts)
         f_fr = 0.0 if d.tmin < -5 else (0.6 if d.tmin < -1 else 1.0)
-        out.append(f_m * f_t * f_fr * (base + (1 - base) * pulse[i]))
+        f_win = favorable_window_factor(sp, i, m, ts)
+        # Устойчивость сильнее влияет на фоновую закладку. Выраженный
+        # дождевой импульс остаётся самостоятельным биологическим триггером.
+        trigger = (base + (1 - base) * pulse[i]) * (1.0 if pulse[i] >= 0.50 else f_win)
+        out.append(f_m * f_t * f_fr * trigger)
     return out
 
 
