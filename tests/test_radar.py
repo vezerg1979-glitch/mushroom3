@@ -23,3 +23,8 @@ def test_rows_sorted_by_best_week_value():
 def test_text_has_species_dates_and_legend():
     s=radar.text(days(), {'Белый':[20,40,72,60], 'Лисичка':[10,15,20,25]}, 0)
     assert 'Грибной радар' in s and 'Белый' in s and '20.09' in s and '++' in s
+
+
+def test_icon_grades():
+    assert [radar.icon_grade(v) for v in (0, 32, 33, 49, 50, 67, 68, 100)] == [
+        "low", "low", "medium", "medium", "good", "good", "high", "high"]

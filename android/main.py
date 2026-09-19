@@ -55,6 +55,7 @@ from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.image import Image
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
@@ -1357,8 +1358,49 @@ class MushroomApp(App):
         r = self.res
         month = r.days[r.today].d.month
         names = [sp.name for sp in engine.SPECIES.values() if sp.months.get(month, 0) > 0]
-        self._sheet("Грибной радар — 7 дней",
-                    radar.text(r.days, r.idx, r.today, names=names, horizon=7), 0.82)
+        entries = radar.rows(r.days, r.idx, r.today, names=names, horizon=7)[:8]
+        if not entries:
+            self._sheet("Грибной радар", "Недостаточно данных для радара.", 0.35)
+            return
+        # Изображения вместо текстовых ++ / + / ~ / ·. Каждая дата занимает
+        # собственную колонку, поэтому иконки не смещаются на узких экранах.
+        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8),
+                            size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+        for entry in entries:
+            caption = Label(text=f"{entry['name']} · {entry['phase']} · "
+                                 f"макс. {entry['best']:.0f}/100",
+                            color=INK, font_size=sp(12), bold=True,
+                            size_hint_y=None, height=dp(24),
+                            halign="left", valign="middle")
+            caption.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+            content.add_widget(caption)
+            cells = GridLayout(cols=7, spacing=dp(2), size_hint_y=None,
+                               height=dp(48))
+            for offset in range(7):
+                cell = BoxLayout(orientation="vertical", spacing=dp(1))
+                if offset < len(entry['values']) and r.today + offset < len(r.days):
+                    value = entry['values'][offset]
+                    grade = radar.icon_grade(value)
+                    cell.add_widget(Image(source=os.path.join(os.path.dirname(__file__),
+                                                              f"radar_{grade}.png"),
+                                          size_hint_y=None, height=dp(27),
+                                          allow_stretch=True, keep_ratio=True))
+                    day = r.days[r.today + offset].d.strftime("%d.%m")
+                    cell.add_widget(Label(text=day, font_size=sp(9), color=MUTED))
+                cells.add_widget(cell)
+            content.add_widget(cells)
+        hint = Label(text="Цвет грибочка показывает индекс, не вероятность находки.",
+                     color=MUTED, font_size=sp(10), size_hint_y=None,
+                     height=dp(30), halign="left")
+        hint.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+        content.add_widget(hint)
+        scroll = ScrollView(bar_width=dp(3))
+        scroll.add_widget(content)
+        popup = Popup(title="Грибной радар — 7 дней", content=scroll,
+                      size_hint=(0.96, 0.85), separator_color=ACCENT,
+                      title_size=sp(15))
+        popup.open()
 
     def locate_me(self):
         """Своё положение: подписка на приёмник, первая же точка идёт в расчёт.
