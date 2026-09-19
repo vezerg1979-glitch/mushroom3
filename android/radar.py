@@ -84,3 +84,12 @@ def text(days, idx_by_name: dict, today: int, names=None, horizon: int = 7,
         head.append(marks)
     head += ["", "[size=11sp]Радар показывает форму уже рассчитанного прогноза, а не вероятность находки.[/size]"]
     return "\n".join(head)
+
+
+def icon_grade(value: float) -> str:
+    """Категория маленькой иконки гриба для семидневного радара."""
+    value = _v([value], 0)
+    if value >= 68: return "high"
+    if value >= 50: return "good"
+    if value >= 33: return "medium"
+    return "low"

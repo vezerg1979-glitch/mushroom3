@@ -1,0 +1,6 @@
+[
+  "tests/test_radar.py::test_icon_grades",
+  "tests/test_radar.py::test_phase_cycle",
+  "tests/test_radar.py::test_rows_sorted_by_best_week_value",
+  "tests/test_radar.py::test_text_has_species_dates_and_legend"
+]
