@@ -1,0 +1,74 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run JavaScript tests
+        run: node tests/test_core.js
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check app/src/main/assets/app.js
+          node --check app/src/main/assets/core.js
+          node --check app/src/main/assets/content.js
+          node --check app/src/main/assets/catalog_expanded.js
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The legacy "tools" SDK package is no longer available from Google.
+      # Install only supported packages; cmdline-tools is supplied by this action.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: 'false'
+
+      - name: Install Android platform
+        run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+
+      # Repository intentionally has no Gradle Wrapper binary; setup-gradle
+      # installs the pinned Gradle version on the GitHub Actions runner.
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build installable debug APK
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Upload APK (Actions > Artifacts)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gortenziya-Moy-Sad-debug-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30

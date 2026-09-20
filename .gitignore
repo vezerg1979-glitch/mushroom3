@@ -1,18 +1,31 @@
-# Ключи подписи: попадание в репозиторий означает, что кто угодно сможет
-# выпускать обновления приложения от вашего имени
-*.keystore
+# Android Studio / Gradle generated files
+.gradle/
+**/build/
+local.properties
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+
+# Signing keys and local secrets (never commit these)
 *.jks
-*.b64
-keystore*
+*.keystore
+key.properties
+secrets.properties
+*.pem
+*.p12
 
-# Сборка
-android/.buildozer/
-android/bin/
-android/build.log
-android/release.log
-.buildozer/
+# Temporary/test outputs
+coverage/
+node_modules/
+*.log
 
-# Python
-__pycache__/
-*.pyc
-.pytest_cache/
+# Personal Supabase project configuration
+supabase.properties

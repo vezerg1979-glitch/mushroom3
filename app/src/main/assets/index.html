@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#f7f7f2" />
+<title>Гортензия · Мой сад</title>
+<link rel="stylesheet" href="style.css" />
+<script defer src="core.js"></script>
+<script defer src="content.js"></script>
+<script defer src="catalog_expanded.js"></script>
+<script defer src="app.js"></script>
+</head>
+<body>
+<div id="app" class="app-shell">
+  <main id="main" class="main-content" aria-live="polite"></main>
+  <nav id="tabs" class="bottom-nav" aria-label="Разделы приложения">
+    <button class="tab active" data-tab="today" aria-label="Сегодня"><span class="tab-icon">⌂</span><span>Сегодня</span></button>
+    <button class="tab" data-tab="plants" aria-label="Мой сад"><span class="tab-icon">❀</span><span>Мой сад</span></button>
+    <button class="tab" data-tab="calendar" aria-label="Календарь"><span class="tab-icon">▦</span><span>Календарь</span></button>
+    <button class="tab" data-tab="guide" aria-label="Справочник"><span class="tab-icon">☷</span><span>Справочник</span></button>
+    <button class="tab" data-tab="gallery" aria-label="Фотоальбом"><span class="tab-icon">▧</span><span>Альбом</span></button>
+    <button class="tab" data-tab="more" aria-label="Ещё"><span class="tab-icon">···</span><span>Ещё</span></button>
+  </nav>
+  <div id="overlay" class="overlay hidden" aria-live="polite"></div>
+  <div id="toast" class="toast" role="status"></div>
+  <input type="file" id="backup-file" accept="application/json,.json" hidden />
+</div>
+</body>
+</html>

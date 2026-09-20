@@ -1,0 +1,4 @@
+# Copy to supabase.properties and fill in your single shared project settings.
+# NEVER use a service-role key here.
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_ANON_KEY=YOUR_PUBLISHABLE_OR_ANON_KEY
