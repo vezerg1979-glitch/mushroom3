@@ -1,0 +1,5 @@
+[
+  "tests/test_weather_fallback.py::test_cache_roundtrip",
+  "tests/test_weather_fallback.py::test_cached_fallback",
+  "tests/test_weather_fallback.py::test_no_fabricated_history"
+]

@@ -874,7 +874,7 @@ LAST_WEATHER_SOURCE = "unknown"
 
 
 def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
-    """Open-Meteo -> MET Norway limited estimate -> cached Open-Meteo.
+    """Open-Meteo -> current cached forecast -> MET Norway limited estimate.
 
     MET-only mode has no verified 31-day rainfall history, so output is
     explicitly marked low-confidence; no fabricated historical observations.
@@ -888,6 +888,13 @@ def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
         return days
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as primary_error:
         cached = _cache_read(place.lat, place.lon)
+        # Prefer an actual cached forecast over a synthetic-history MET estimate.
+        # This also avoids unnecessary network requests when offline.
+        if cached and any(d.d == date.today() for d in cached[0]):
+            days, saved = cached
+            LAST_WEATHER_SOURCE = ("Кэш Open-Meteo (обновлён " +
+                datetime.fromtimestamp(saved).strftime("%d.%m %H:%M") + ")")
+            return days
         try:
             alternative = _met_norway_forecast(place.lat, place.lon)
             days = _met_to_days(alternative, forecast_days, cached)

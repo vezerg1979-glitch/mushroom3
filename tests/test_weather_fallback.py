@@ -27,6 +27,7 @@ def test_cached_fallback(tmp_path, monkeypatch):
     def offline(*args):
         raise urllib.error.URLError('refused')
     monkeypatch.setattr(mod, 'probe_soil_keys', offline)
+    monkeypatch.setattr(mod, '_met_norway_forecast', lambda *args: (_ for _ in ()).throw(AssertionError('MET Norway must not be called when cache is valid')))
     assert mod.fetch_weather(place, 7) == expected
     assert 'Кэш' in mod.LAST_WEATHER_SOURCE
 
