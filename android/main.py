@@ -82,7 +82,7 @@ import track as track_mod
 import wave
 import radar
 import species_art
-import forest_game
+import forest_quest
 from mapview import PlacePicker
 from walkscreen import WalkScreen
 
@@ -847,7 +847,7 @@ class MushroomApp(App):
         game_button = Button(text="Тихая охота", size_hint_y=None,
                              height=TOUCH, font_size=sp(14), bold=True)
         uikit.style_secondary(game_button, CARD, INK)
-        game_button.bind(on_release=lambda *_: forest_game.open_game())
+        game_button.bind(on_release=lambda *_: forest_quest.open_game())
         parts["forest_game"] = game_button
 
         self._reload_spots()
