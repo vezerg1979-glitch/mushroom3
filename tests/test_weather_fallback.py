@@ -39,3 +39,14 @@ def test_no_fabricated_history(tmp_path, monkeypatch):
     assert len(days) == mod.PAST_DAYS + 1
     assert 'ограниченный' in mod.LAST_WEATHER_SOURCE
     assert all(d.soil_w is None for d in days)
+
+
+def test_met_unknown_history_is_not_drought(tmp_path, monkeypatch):
+    monkeypatch.setenv('MUSHROOM_CACHE_DIR', str(tmp_path))
+    monkeypatch.setattr(mod, 'probe_soil_keys', lambda *args: (_ for _ in ()).throw(urllib.error.URLError('refused')))
+    monkeypatch.setattr(mod, '_met_norway_forecast', lambda *args: {date.today(): {'temps':[12], 'precip':0, 'rhs':[80], 'winds':[2]}})
+    days = mod.fetch_weather(mod.Place('test', 55.75, 37.62), 7)
+    assert all(d.precip > 0 for d in days[:mod.PAST_DAYS])
+    assert days[-1].precip == 0
+    assert 'ограниченный' in mod.LAST_WEATHER_SOURCE
+    assert 0 < mod.water_balance(days)[-1] < 1

@@ -1232,5 +1232,6 @@
   "tests/test_wave.py::test_unknown_species_are_skipped",
   "tests/test_weather_fallback.py::test_cache_roundtrip",
   "tests/test_weather_fallback.py::test_cached_fallback",
+  "tests/test_weather_fallback.py::test_met_unknown_history_is_not_drought",
   "tests/test_weather_fallback.py::test_no_fabricated_history"
 ]

@@ -36,7 +36,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.40.3"
+VERSION = "3.40.4"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -873,10 +873,15 @@ def _met_to_days(met: dict[date, dict], forecast_days: int,
     if not future or today not in met:
         raise ValueError("MET Norway не вернул прогноз на сегодня")
     known = {d.d: d for d in cached[0]} if cached else {}
-    # A neutral spin-up only initializes thermal/moisture memory. It must not
-    # be represented to users as 31 days of observed weather.
+    # Unknown history is NOT a month of zero rain. Use a neutral moisture
+    # equilibrium for model warm-up, never presenting these values as observed.
+    # This is an initialization assumption, not a reconstruction of rainfall.
     baseline = met[today]
     initial_t = sum(baseline["temps"]) / len(baseline["temps"])
+    initial_et0 = max(0.4, min(6.5, 0.10 * max(initial_t, 0) + 0.9))
+    # Water entering the canopy reservoir roughly offsets its evaporation.
+    # The assumed rainfall is only used for the internal spin-up.
+    neutral_precip = CANOPY * initial_et0 / INTERCEPT
     days = []
     for i in range(PAST_DAYS, 0, -1):
         d = today - timedelta(days=i)
@@ -884,7 +889,7 @@ def _met_to_days(met: dict[date, dict], forecast_days: int,
             days.append(known[d])
         else:
             days.append(Day(d, initial_t + 3, initial_t - 3, initial_t,
-                            0.0, 1.8, None, None, None, None))
+                            neutral_precip, initial_et0, None, None, None, None))
     for d in future[:max(3, min(9, forecast_days))]:
         row = met[d]
         temps = row["temps"]
@@ -930,7 +935,7 @@ def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
                 for i in range(1, PAST_DAYS + 1))
             LAST_WEATHER_SOURCE = ("MET Norway + сохранённая история (почва оценочная)"
                                    if has_history else
-                                   "MET Norway — ограниченный прогноз; история осадков неизвестна")
+                                   "MET Norway — ограниченный прогноз; история неизвестна, влагозапас оценочный")
             return days
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as backup_error:
             if cached:
