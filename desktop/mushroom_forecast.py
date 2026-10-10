@@ -852,8 +852,9 @@ def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
         if alternative:
             raise ConnectionError("MET Norway доступен, но не предоставляет 31 день истории "
                                   "и почвенные данные для полноценного грибного прогноза. "
-                                  "Нужна хотя бы одна успешная загрузка Open-Meteo.") from primary_error
-        raise ConnectionError("Погодные сервисы не вернули пригодных данных") from primary_error
+                                  "Нужна хотя бы одна успешная загрузка Open-Meteo. "
+                                  f"Ошибка Open-Meteo: {primary_error}") from primary_error
+        raise ConnectionError(f"Погодные сервисы не вернули пригодных данных. Ошибка Open-Meteo: {primary_error}") from primary_error
 
 
 def demo_weather(forecast_days: int, seed: int = 7) -> tuple[Place, list[Day]]:
