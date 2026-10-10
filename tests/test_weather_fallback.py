@@ -33,6 +33,8 @@ def test_cached_fallback(tmp_path, monkeypatch):
 def test_no_fabricated_history(tmp_path, monkeypatch):
     monkeypatch.setenv('MUSHROOM_CACHE_DIR', str(tmp_path))
     monkeypatch.setattr(mod, 'probe_soil_keys', lambda *args: (_ for _ in ()).throw(urllib.error.URLError('refused')))
-    monkeypatch.setattr(mod, '_met_norway_forecast', lambda *args: {date.today(): {'temps':[10], 'precip':0}})
-    with pytest.raises(ConnectionError, match='31 день истории'):
-        mod.fetch_weather(mod.Place('test', 55.75, 37.62), 7)
+    monkeypatch.setattr(mod, '_met_norway_forecast', lambda *args: {date.today(): {'temps':[10], 'precip':0, 'rhs':[], 'winds':[]}})
+    days = mod.fetch_weather(mod.Place('test', 55.75, 37.62), 7)
+    assert len(days) == mod.PAST_DAYS + 1
+    assert 'ограниченный' in mod.LAST_WEATHER_SOURCE
+    assert all(d.soil_w is None for d in days)

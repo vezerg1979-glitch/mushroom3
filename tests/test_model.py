@@ -1101,6 +1101,7 @@ class TestPlaces(ResetConstants):
                          start=date.today() - timedelta(days=34))
         P.cache_forecast(spot, days)
         engine._get_json = lambda url, params: (_ for _ in ()).throw(OSError("нет сети"))
+        engine._met_norway_forecast = lambda lat, lon: (_ for _ in ()).throw(OSError("нет сети"))
         f = P.forecast_spot(spot, 7)
         self.assertEqual(f.error, "")
         self.assertIsNotNone(f.stale)
@@ -1109,6 +1110,7 @@ class TestPlaces(ResetConstants):
     def test_forecast_reports_error_without_cache(self):
         P = self.places
         engine._get_json = lambda url, params: (_ for _ in ()).throw(OSError("нет сети"))
+        engine._met_norway_forecast = lambda lat, lon: (_ for _ in ()).throw(OSError("нет сети"))
         f = P.forecast_spot(P.Spot("Пустое", 10.0, 10.0), 7)
         self.assertIn("нет сети", f.error)
         self.assertFalse(f.days)
@@ -1118,6 +1120,7 @@ class TestPlaces(ResetConstants):
         P = self.places
         engine.set_biotope("ельник")
         engine._get_json = lambda url, params: (_ for _ in ()).throw(OSError("нет сети"))
+        engine._met_norway_forecast = lambda lat, lon: (_ for _ in ()).throw(OSError("нет сети"))
         P.forecast_spot(P.Spot("Бор", 55.9, 38.0, "сосняк"), 7)
         self.assertEqual(engine.CURRENT_BIOTOPE.key, "ельник")
 

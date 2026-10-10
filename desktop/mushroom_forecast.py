@@ -36,7 +36,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.39"
+VERSION = "3.40"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -793,39 +793,91 @@ def _cache_write(lat: float, lon: float, days: list[Day]) -> None:
 
 
 def _met_norway_forecast(lat: float, lon: float) -> dict[date, dict]:
-    """Free no-key forecast. MET Norway does NOT supply historical or soil data."""
+    """MET Norway no-key hourly forecast aggregated by UTC date.
+
+    Precipitation periods are non-overlapping: prefer next_1_hours, otherwise
+    next_6_hours only when no hourly precipitation is available for that date.
+    """
     url = "https://api.met.no/weatherapi/locationforecast/2.0/compact?" + urllib.parse.urlencode(
         {"lat": round(lat, 4), "lon": round(lon, 4)})
     req = urllib.request.Request(url, headers={
-        "User-Agent": "NavigatorGribnika/3.39 (weather fallback; contact: https://github.com)",
+        "User-Agent": "NavigatorGribnika/3.40 (Android mushroom forecast application)",
         "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=18) as response:
+    with urllib.request.urlopen(req, timeout=4) as response:
         payload = json.load(response)
     result: dict[date, dict] = {}
     for item in payload.get("properties", {}).get("timeseries", []):
         stamp = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
-        day = stamp.date()  # UTC daily aggregation; do not claim local-day precision.
-        details = item.get("data", {}).get("instant", {}).get("details", {})
-        if "air_temperature" not in details:
+        day = stamp.date()
+        data = item.get("data", {})
+        details = data.get("instant", {}).get("details", {})
+        if details.get("air_temperature") is None:
             continue
-        row = result.setdefault(day, {"temps": [], "rhs": [], "precip": 0.0})
+        row = result.setdefault(day, {"temps": [], "rhs": [], "winds": [],
+                                      "precip_hours": {}, "precip_six": {}})
         row["temps"].append(float(details["air_temperature"]))
         if details.get("relative_humidity") is not None:
             row["rhs"].append(float(details["relative_humidity"]))
-        next_hour = item.get("data", {}).get("next_1_hours", {}).get("details", {})
-        if next_hour.get("precipitation_amount") is not None:
-            row["precip"] += max(0.0, float(next_hour["precipitation_amount"]))
+        if details.get("wind_speed") is not None:
+            row["winds"].append(float(details["wind_speed"]))
+        for hours, key in ((1, "precip_hours"), (6, "precip_six")):
+            block = data.get(f"next_{hours}_hours", {}).get("details", {})
+            amount = block.get("precipitation_amount")
+            if amount is not None:
+                row[key][stamp.isoformat()] = max(0.0, float(amount))
+    for row in result.values():
+        # Do not sum overlapping 1h and 6h forecast intervals.
+        hourly = row.pop("precip_hours")
+        six = row.pop("precip_six")
+        row["precip"] = sum(hourly.values()) if hourly else sum(six.values())
     return result
+
+
+def _met_to_days(met: dict[date, dict], forecast_days: int,
+                 cached: tuple[list[Day], float] | None = None) -> list[Day]:
+    """Limited forecast from MET. Never invent historical precipitation.
+
+    A previous cache may provide measured/modelled history; otherwise the
+    model is initialized with a neutral moisture state and an explicitly
+    flagged 31-day spin-up (zero precipitation is NOT asserted as observed).
+    """
+    today = date.today()
+    future = sorted(d for d in met if d >= today)
+    if not future or today not in met:
+        raise ValueError("MET Norway не вернул прогноз на сегодня")
+    known = {d.d: d for d in cached[0]} if cached else {}
+    # A neutral spin-up only initializes thermal/moisture memory. It must not
+    # be represented to users as 31 days of observed weather.
+    baseline = met[today]
+    initial_t = sum(baseline["temps"]) / len(baseline["temps"])
+    days = []
+    for i in range(PAST_DAYS, 0, -1):
+        d = today - timedelta(days=i)
+        if d in known:
+            days.append(known[d])
+        else:
+            days.append(Day(d, initial_t + 3, initial_t - 3, initial_t,
+                            0.0, 1.8, None, None, None, None))
+    for d in future[:max(3, min(9, forecast_days))]:
+        row = met[d]
+        temps = row["temps"]
+        tmean = sum(temps) / len(temps)
+        rh = sum(row["rhs"]) / len(row["rhs"]) if row["rhs"] else None
+        # Approximate ET0 (mm/day); no claim of measured ET0 or soil data.
+        et0 = max(0.4, min(6.5, 0.10 * max(tmean, 0) + 0.9))
+        days.append(Day(d, max(temps), min(temps), tmean,
+                        row["precip"], et0, rh))
+    return days
 
 
 LAST_WEATHER_SOURCE = "unknown"
 
 
 def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
-    """Online Open-Meteo, then MET Norway + cached history, then dated cache.
+    """Open-Meteo -> MET Norway limited estimate -> cached Open-Meteo.
 
-    A fresh MET forecast alone cannot recreate 31 days of historical weather,
-    soil observations or ET0. Never silently pass it off as a full forecast.
+    MET-only mode has no verified 31-day rainfall history, so output is
+    explicitly marked low-confidence; no fabricated historical observations.
     """
     global LAST_WEATHER_SOURCE
     try:
@@ -836,25 +888,25 @@ def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
         return days
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as primary_error:
         cached = _cache_read(place.lat, place.lon)
-        if cached:
-            days, saved = cached
-            # Only use cached forecasts while still covering today.
-            if any(d.d == date.today() for d in days):
-                LAST_WEATHER_SOURCE = "Кэш Open-Meteo (обновлён " + datetime.fromtimestamp(saved).strftime("%d.%m %H:%M") + ")"
-                return days
-        # Check alternative provider for diagnostics, but do not fabricate
-        # missing 31-day history / soil moisture / ET0 required by model.
         try:
             alternative = _met_norway_forecast(place.lat, place.lon)
+            days = _met_to_days(alternative, forecast_days, cached)
+            has_history = cached is not None and all(
+                any(x.d == date.today() - timedelta(days=i) for x in cached[0])
+                for i in range(1, PAST_DAYS + 1))
+            LAST_WEATHER_SOURCE = ("MET Norway + сохранённая история (почва оценочная)"
+                                   if has_history else
+                                   "MET Norway — ограниченный прогноз; история осадков неизвестна")
+            return days
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as backup_error:
-            raise ConnectionError("Нет связи с Open-Meteo и MET Norway; актуального кэша нет. "
+            if cached:
+                days, saved = cached
+                if any(d.d == date.today() for d in days):
+                    LAST_WEATHER_SOURCE = ("Кэш Open-Meteo (обновлён " +
+                        datetime.fromtimestamp(saved).strftime("%d.%m %H:%M") + ")")
+                    return days
+            raise ConnectionError("Не удалось загрузить погоду. "
                                   f"Open-Meteo: {primary_error}; MET Norway: {backup_error}") from backup_error
-        if alternative:
-            raise ConnectionError("MET Norway доступен, но не предоставляет 31 день истории "
-                                  "и почвенные данные для полноценного грибного прогноза. "
-                                  "Нужна хотя бы одна успешная загрузка Open-Meteo. "
-                                  f"Ошибка Open-Meteo: {primary_error}") from primary_error
-        raise ConnectionError(f"Погодные сервисы не вернули пригодных данных. Ошибка Open-Meteo: {primary_error}") from primary_error
 
 
 def demo_weather(forecast_days: int, seed: int = 7) -> tuple[Place, list[Day]]:
