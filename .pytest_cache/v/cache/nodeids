@@ -747,6 +747,8 @@
   "tests/test_module_api.py::test_used_modules_are_imported[walkjournal]",
   "tests/test_module_api.py::test_used_modules_are_imported[walkscreen]",
   "tests/test_module_api.py::test_used_modules_are_imported[wave]",
+  "tests/test_nasa_power_history.py::test_met_uses_nasa_history_not_neutral",
+  "tests/test_nasa_power_history.py::test_nasa_history_parsing_and_missing_values",
   "tests/test_nav.py::test_an_empty_walk_gives_no_direction",
   "tests/test_nav.py::test_arrived_stops_guiding",
   "tests/test_nav.py::test_arrow_relative_when_moving",

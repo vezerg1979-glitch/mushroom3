@@ -36,7 +36,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.40.4"
+VERSION = "3.40.5"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -860,8 +860,45 @@ def _met_norway_forecast(lat: float, lon: float) -> dict[date, dict]:
     return {d: row for d, row in result.items() if row["temps"]}
 
 
+def _nasa_power_history(lat: float, lon: float, today: date | None = None) -> dict[date, Day]:
+    """Daily NASA POWER history. Missing/sentinel values are never treated as zero.
+
+    POWER may publish recent days with a delay; only complete daily records
+    are returned. Units: PRECTOTCORR mm/day, T2M* degrees Celsius.
+    """
+    today = today or date.today()
+    start = today - timedelta(days=PAST_DAYS)
+    end = today - timedelta(days=1)
+    params = {"parameters": "PRECTOTCORR,T2M,T2M_MAX,T2M_MIN",
+              "community": "AG", "longitude": round(lon, 4),
+              "latitude": round(lat, 4), "start": start.strftime("%Y%m%d"),
+              "end": end.strftime("%Y%m%d"), "format": "JSON"}
+    url = "https://power.larc.nasa.gov/api/temporal/daily/point?" + urllib.parse.urlencode(params)
+    request = urllib.request.Request(url, headers={"User-Agent": "NavigatorGribnika/3.40.5", "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=9) as response:
+        payload = json.load(response)
+    values = payload["properties"]["parameter"]
+    output = {}
+    for i in range(PAST_DAYS):
+        d = start + timedelta(days=i)
+        key = d.strftime("%Y%m%d")
+        try:
+            numbers = [float(values[k][key]) for k in ("PRECTOTCORR", "T2M", "T2M_MAX", "T2M_MIN")]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) and v != -999.0 for v in numbers):
+            continue
+        rain, mean, high, low = numbers
+        if rain < 0 or high < low or not (-90 <= low <= high <= 65):
+            continue
+        et0 = max(0.4, min(6.5, 0.10 * max(mean, 0) + 0.9))
+        output[d] = Day(d, high, low, mean, rain, et0)
+    return output
+
+
 def _met_to_days(met: dict[date, dict], forecast_days: int,
-                 cached: tuple[list[Day], float] | None = None) -> list[Day]:
+                 cached: tuple[list[Day], float] | None = None,
+                 history: dict[date, Day] | None = None) -> list[Day]:
     """Limited forecast from MET. Never invent historical precipitation.
 
     A previous cache may provide measured/modelled history; otherwise the
@@ -872,7 +909,9 @@ def _met_to_days(met: dict[date, dict], forecast_days: int,
     future = sorted(d for d in met if d >= today)
     if not future or today not in met:
         raise ValueError("MET Norway не вернул прогноз на сегодня")
-    known = {d.d: d for d in cached[0]} if cached else {}
+    known = dict(history or {})
+    # Prefer previously downloaded Open-Meteo days when available.
+    known.update({d.d: d for d in cached[0] if d.d < today} if cached else {})
     # Unknown history is NOT a month of zero rain. Use a neutral moisture
     # equilibrium for model warm-up, never presenting these values as observed.
     # This is an initialization assumption, not a reconstruction of rainfall.
@@ -929,13 +968,17 @@ def fetch_weather(place: Place, forecast_days: int) -> list[Day]:
             return days
         try:
             alternative = _met_norway_forecast(place.lat, place.lon)
-            days = _met_to_days(alternative, forecast_days, cached)
-            has_history = cached is not None and all(
-                any(x.d == date.today() - timedelta(days=i) for x in cached[0])
-                for i in range(1, PAST_DAYS + 1))
-            LAST_WEATHER_SOURCE = ("MET Norway + сохранённая история (почва оценочная)"
-                                   if has_history else
-                                   "MET Norway — ограниченный прогноз; история неизвестна, влагозапас оценочный")
+            try:
+                nasa = _nasa_power_history(place.lat, place.lon)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError):
+                nasa = {}
+            days = _met_to_days(alternative, forecast_days, cached, nasa)
+            historical_dates = {d.d for d in days if date.today() - timedelta(days=PAST_DAYS) <= d.d < date.today()}
+            actual_dates = set(nasa) | ({d.d for d in cached[0]} if cached else set())
+            coverage = len(historical_dates & actual_dates)
+            LAST_WEATHER_SOURCE = (f"MET Norway + NASA POWER: история {coverage}/{PAST_DAYS} дней; "
+                                   + ("влагозапас оценочный" if coverage == PAST_DAYS else
+                                      "ограниченный прогноз: часть истории неизвестна, влагозапас оценочный"))
             return days
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as backup_error:
             if cached:

@@ -7,7 +7,7 @@ package.domain = ru.grezev
 source.dir = .
 source.include_exts = py,png,jpg,ttf,json
 
-version = 3.40.4
+version = 3.40.5
 
 # Ветку p4a обязательно держать закреплённой: на develop собирается
 # Python 3.14, под который не подходят колёса, и сборка обрывается
