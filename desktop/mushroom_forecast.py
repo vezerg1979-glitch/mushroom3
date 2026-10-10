@@ -36,7 +36,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-VERSION = "3.40"
+VERSION = "3.40.3"
 
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -382,7 +382,7 @@ SNOW_GONE = 0.02                 # ниже этого считаем, что с
 GDD_BASE = 5.0                   # база для накопления тепла после схода снега
 
 
-def _get_json(url: str, params: dict, timeout: int = 25) -> dict:
+def _get_json(url: str, params: dict, timeout: int = 7) -> dict:
     full = url + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(full, headers={"User-Agent": "mushroom-forecast/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -793,20 +793,23 @@ def _cache_write(lat: float, lon: float, days: list[Day]) -> None:
 
 
 def _met_norway_forecast(lat: float, lon: float) -> dict[date, dict]:
-    """MET Norway no-key hourly forecast aggregated by UTC date.
+    """Aggregate MET Norway intervals without double-counting precipitation.
 
-    Precipitation periods are non-overlapping: prefer next_1_hours, otherwise
-    next_6_hours only when no hourly precipitation is available for that date.
+    The short-range product has hourly periods and the longer range has
+    six-hour periods. Split non-overlapping periods at UTC midnight; do not
+    mistake absent precipitation for zero.
     """
     url = "https://api.met.no/weatherapi/locationforecast/2.0/compact?" + urllib.parse.urlencode(
         {"lat": round(lat, 4), "lon": round(lon, 4)})
     req = urllib.request.Request(url, headers={
-        "User-Agent": "NavigatorGribnika/3.40 (Android mushroom forecast application)",
+        "User-Agent": "NavigatorGribnika/3.40.3 (Android mushroom forecast app)",
         "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=4) as response:
+    with urllib.request.urlopen(req, timeout=6) as response:
         payload = json.load(response)
+    entries = payload.get("properties", {}).get("timeseries", [])
     result: dict[date, dict] = {}
-    for item in payload.get("properties", {}).get("timeseries", []):
+    periods = []
+    for item in entries:
         stamp = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
         day = stamp.date()
         data = item.get("data", {})
@@ -814,23 +817,47 @@ def _met_norway_forecast(lat: float, lon: float) -> dict[date, dict]:
         if details.get("air_temperature") is None:
             continue
         row = result.setdefault(day, {"temps": [], "rhs": [], "winds": [],
-                                      "precip_hours": {}, "precip_six": {}})
+                                      "precip": 0.0})
         row["temps"].append(float(details["air_temperature"]))
         if details.get("relative_humidity") is not None:
             row["rhs"].append(float(details["relative_humidity"]))
         if details.get("wind_speed") is not None:
             row["winds"].append(float(details["wind_speed"]))
-        for hours, key in ((1, "precip_hours"), (6, "precip_six")):
-            block = data.get(f"next_{hours}_hours", {}).get("details", {})
-            amount = block.get("precipitation_amount")
+        for hours in (1, 6):
+            amount = data.get(f"next_{hours}_hours", {}).get("details", {}).get("precipitation_amount")
             if amount is not None:
-                row[key][stamp.isoformat()] = max(0.0, float(amount))
-    for row in result.values():
-        # Do not sum overlapping 1h and 6h forecast intervals.
-        hourly = row.pop("precip_hours")
-        six = row.pop("precip_six")
-        row["precip"] = sum(hourly.values()) if hourly else sum(six.values())
-    return result
+                periods.append((stamp, stamp + timedelta(hours=hours), max(0.0, float(amount)), hours))
+    # Prefer 1-hour intervals over overlapping 6-hour intervals, but retain
+    # uncovered portions of 6-hour intervals. Periods are never added twice.
+    periods.sort(key=lambda p: (p[3], p[0]))
+    covered = []
+    for start, end, amount, hours in periods:
+        fragments = [(start, end)]
+        for old_start, old_end in covered:
+            next_fragments = []
+            for lo, hi in fragments:
+                if old_end <= lo or old_start >= hi:
+                    next_fragments.append((lo, hi))
+                else:
+                    if lo < old_start:
+                        next_fragments.append((lo, old_start))
+                    if old_end < hi:
+                        next_fragments.append((old_end, hi))
+            fragments = next_fragments
+            if not fragments:
+                break
+        for lo, hi in fragments:
+            cursor = lo
+            while cursor < hi:
+                boundary = datetime.combine(cursor.date() + timedelta(days=1),
+                                            datetime.min.time(), tzinfo=cursor.tzinfo)
+                stop = min(hi, boundary)
+                row = result.setdefault(cursor.date(), {"temps": [], "rhs": [],
+                                                          "winds": [], "precip": 0.0})
+                row["precip"] += amount * ((stop - cursor).total_seconds() / (hours * 3600))
+                cursor = stop
+        covered.extend(fragments)
+    return {d: row for d, row in result.items() if row["temps"]}
 
 
 def _met_to_days(met: dict[date, dict], forecast_days: int,

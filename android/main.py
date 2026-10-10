@@ -1060,7 +1060,7 @@ class MushroomApp(App):
                                 f"({places_mod.cache_age_text(res.stale)})")
         else:
             self.status.text = (f"{res.place.name} · обновлено {res.stamp:%H:%M} · "
-                                f"Open-Meteo (CC-BY)")
+                                f"{engine.LAST_WEATHER_SOURCE}")
         self.refresh()
         self._check_wave(res)
 
