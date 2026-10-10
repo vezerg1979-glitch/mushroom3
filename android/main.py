@@ -82,6 +82,7 @@ import track as track_mod
 import wave
 import radar
 import species_art
+import forest_game
 from mapview import PlacePicker
 from walkscreen import WalkScreen
 
@@ -757,9 +758,9 @@ class MushroomApp(App):
         # «Подосиновик — обильно, лучший день суббота 23.08» на узком экране
         # переносится на две строки, и при фиксированных 72 dp вторая просто
         # исчезала — человек видел обрубок фразы.
-        self.card = Card(orientation="vertical", size_hint_y=None, height=dp(88),
-                         padding=(dp(14), dp(10)), spacing=dp(4))
-        self.l_main = Label(text="Данные не загружены", font_size=sp(23), bold=True,
+        self.card = Card(orientation="vertical", size_hint_y=None, height=dp(104),
+                         padding=(dp(16), dp(12)), spacing=dp(6))
+        self.l_main = Label(text="Данные не загружены", font_size=sp(26), bold=True,
                             color=INK, halign="left", valign="top", size_hint_y=None)
         self.l_sub = Label(text="Укажите место и нажмите «Прогноз»", font_size=sp(12),
                            color=MUTED, halign="left", valign="top", size_hint_y=None)
@@ -774,7 +775,7 @@ class MushroomApp(App):
                    texture_size=lambda w, t: setattr(w, "height", t[1]))
         self.l_wave.bind(text=lambda w, v: setattr(w, "opacity", 1.0 if v else 0.0))
         self.card.bind(minimum_height=lambda w, v: setattr(
-            w, "height", max(dp(88), v)))
+            w, "height", max(dp(104), v)))
         self.card.add_widget(self.l_main)
         self.card.add_widget(self.l_sub)
         self.card.add_widget(self.l_wave)
@@ -822,7 +823,7 @@ class MushroomApp(App):
         if self.sp_kind.text != self.ALL_KINDS:
             self.sel = self.sp_kind.text
         pick_species.add_widget(self.sp_kind)
-        b_radar = Button(text="Радар", size_hint_x=None, width=dp(82), font_size=sp(13),
+        b_radar = Button(text="Радар", size_hint_x=None, width=dp(92), font_size=sp(14),
                          bold=True, background_normal="", background_color=BLUE)
         b_radar.bind(on_release=lambda *_: self.show_radar())
         b_radar.color = hexc(palette.ON_DARK)
@@ -843,6 +844,11 @@ class MushroomApp(App):
         uikit.style_secondary(calendar_jump, CARD, INK)
         calendar_jump.bind(on_release=lambda *_: self.jump_to_calendar())
         parts["calendar_jump"] = calendar_jump
+        game_button = Button(text="Тихая охота", size_hint_y=None,
+                             height=TOUCH, font_size=sp(14), bold=True)
+        uikit.style_secondary(game_button, CARD, INK)
+        game_button.bind(on_release=lambda *_: forest_game.open_game())
+        parts["forest_game"] = game_button
 
         self._reload_spots()
 
@@ -859,16 +865,16 @@ class MushroomApp(App):
         self._fit_chart()
 
         # --- шкала индекса ---
-        parts["scale"] = ScaleBar(size_hint_y=None, height=dp(34))
+        parts["scale"] = ScaleBar(size_hint_y=None, height=dp(40))
 
         # --- список дней ---
         sv = ScrollView(do_scroll_x=False, bar_width=dp(3))
-        self.list = GridLayout(cols=1, spacing=dp(6), size_hint_y=None, padding=(0, dp(2)))
+        self.list = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, padding=(0, dp(4)))
         self.list.bind(minimum_height=self.list.setter("height"))
         sv.add_widget(self.list)
         parts["list"] = sv
 
-        self.status = Label(text=f"v{engine.VERSION} · погода: Open-Meteo (CC-BY)", font_size=sp(10),
+        self.status = Label(text=f"v{engine.VERSION} · источник погоды уточняется", font_size=sp(10),
                             color=MUTED, size_hint_y=None, height=dp(18))
         parts["status"] = self.status
         return self._arrange(parts)
@@ -899,10 +905,10 @@ class MushroomApp(App):
             root = ScrollView(do_scroll_x=False, bar_width=dp(3),
                               scroll_type=["content", "bars"])
             content = BoxLayout(orientation="vertical", size_hint_y=None,
-                                padding=dp(10), spacing=dp(8))
+                                padding=dp(12), spacing=dp(10))
             content.bind(minimum_height=content.setter("height"))
             for key in ("top", "tools", "spots", "row2", "card", "picks",
-                        "calendar_jump", "chart", "scale"):
+                        "calendar_jump", "forest_game", "chart", "scale"):
                 content.add_widget(parts[key])
             # Avoid nested vertical ScrollViews: the calendar's day rows are
             # part of the same page, so a single swipe reaches every day.
@@ -936,7 +942,7 @@ class MushroomApp(App):
         left.add_widget(шапка)
         for key in ("card", "chart", "scale", "status"):
             left.add_widget(parts[key])
-        for key in ("spots", "row2", "picks", "calendar_jump", "list"):
+        for key in ("spots", "row2", "picks", "calendar_jump", "forest_game", "list"):
             right.add_widget(parts[key])
         root.add_widget(left)
         root.add_widget(right)
@@ -1017,8 +1023,8 @@ class MushroomApp(App):
             return
         self.btn.disabled = True
         self.btn.text = "…"
-        self.status.text = "Запрос погодных данных…"
-        self._spin_stop = uikit.spin_status(self.status, "Запрос погодных данных")
+        self.status.text = "Загрузка: Open-Meteo / MET Norway / NASA POWER…"
+        self._spin_stop = uikit.spin_status(self.status, "Загрузка погоды")
         place = f"{self.lat:.5f}, {self.lon:.5f}"
         fdays = int(self.sp_days.text.split()[0])
         threading.Thread(target=self._work, args=(place, fdays), daemon=True).start()

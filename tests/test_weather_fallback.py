@@ -45,8 +45,25 @@ def test_met_unknown_history_is_not_drought(tmp_path, monkeypatch):
     monkeypatch.setenv('MUSHROOM_CACHE_DIR', str(tmp_path))
     monkeypatch.setattr(mod, 'probe_soil_keys', lambda *args: (_ for _ in ()).throw(urllib.error.URLError('refused')))
     monkeypatch.setattr(mod, '_met_norway_forecast', lambda *args: {date.today(): {'temps':[12], 'precip':0, 'rhs':[80], 'winds':[2]}})
+    # Explicitly isolate the NASA API: this is the offline-history scenario.
+    monkeypatch.setattr(mod, '_nasa_power_history', lambda *args: {})
     days = mod.fetch_weather(mod.Place('test', 55.75, 37.62), 7)
-    assert all(d.precip > 0 for d in days[:mod.PAST_DAYS])
+    assert len(days) == mod.PAST_DAYS + 1
     assert days[-1].precip == 0
+    assert '0/' in mod.LAST_WEATHER_SOURCE
     assert 'ограниченный' in mod.LAST_WEATHER_SOURCE
     assert 0 < mod.water_balance(days)[-1] < 1
+
+
+def test_nasa_measured_zero_rain_is_preserved(tmp_path, monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setenv('MUSHROOM_CACHE_DIR', str(tmp_path))
+    monkeypatch.setattr(mod, 'probe_soil_keys', lambda *args: (_ for _ in ()).throw(urllib.error.URLError('refused')))
+    monkeypatch.setattr(mod, '_met_norway_forecast', lambda *args: {date.today(): {'temps':[12], 'precip':0, 'rhs':[80], 'winds':[2]}})
+    yesterday = date.today() - timedelta(days=1)
+    measured = mod.Day(yesterday, 13, 7, 10, 0, 1.9)
+    monkeypatch.setattr(mod, '_nasa_power_history', lambda *args: {yesterday: measured})
+    days = mod.fetch_weather(mod.Place('test', 55.75, 37.62), 7)
+    assert days[-2] == measured
+    assert '1/' in mod.LAST_WEATHER_SOURCE
+    assert 'ограниченный' in mod.LAST_WEATHER_SOURCE
